@@ -99,6 +99,7 @@
   }
   .ghost-btn:hover{ border-color:var(--accent); color:var(--ink); }
   .hint-line{ color:var(--ink-soft); font-size:0.86rem; margin:0 0 16px; min-height:1.2em; }
+  .hint-line.thinking{ animation:movePulse 1.2s ease-in-out infinite; font-style:italic; }
 
   .mode-toggle{ display:flex; gap:8px; margin:0 0 10px; }
   .mode-btn{
@@ -133,19 +134,26 @@
   .player-name{ font-weight:600; flex:1; font-size:0.94rem; }
   .wall-count{ font-weight:700; font-size:0.94rem; white-space:nowrap; }
   .wall-label{ font-weight:500; color:var(--ink-soft); font-size:0.78rem; }
+  .cpu-tag{ font-size:0.7rem; font-weight:700; color:var(--ink-soft); background:var(--panel-2); border-radius:6px; padding:2px 6px; margin-left:6px; vertical-align:middle; }
 
-  /* ---------- WIN OVERLAY ---------- */
-  #winOverlay{
+  /* ---------- OVERLAYS (genéricos, reutilizados por todos los paneles) ---------- */
+  .overlay-backdrop{
     position:fixed; inset:0; background:rgba(20,15,9,0.55); display:flex;
-    align-items:center; justify-content:center; padding:20px; z-index:20;
+    align-items:center; justify-content:center; padding:20px; z-index:30;
+    overflow-y:auto;
   }
-  .win-card{
-    background:var(--panel); border-radius:22px; padding:34px; max-width:360px; width:100%;
-    text-align:center; box-shadow:0 24px 50px rgba(0,0,0,0.4); border:2px solid var(--wc, var(--accent));
+  #confirmOverlay{ z-index:40; }
+  .modal-card{
+    background:var(--panel); border-radius:22px; padding:30px; max-width:360px; width:100%;
+    text-align:center; box-shadow:0 24px 50px rgba(0,0,0,0.4); border:2px solid var(--line);
+    max-height:calc(100vh - 40px); overflow-y:auto;
   }
-  .win-card h2{ font-size:1.5rem; margin-bottom:8px; }
-  .win-card p{ color:var(--ink-soft); margin:0 0 24px; }
-  .win-actions{ display:flex; gap:10px; flex-direction:column; }
+  .modal-card.accent-border{ border-color:var(--wc, var(--accent)); }
+  .modal-card.wide{ max-width:480px; text-align:left; }
+  .modal-card.wide h2{ text-align:center; }
+  .modal-card h2{ font-size:1.5rem; margin:0 0 8px; }
+  .modal-card p{ color:var(--ink-soft); margin:0 0 20px; line-height:1.5; }
+  .modal-actions{ display:flex; gap:10px; flex-direction:column; margin-top:22px; }
   .primary-btn{
     padding:13px; border:none; border-radius:12px; background:var(--ink); color:var(--panel);
     font-weight:700; cursor:pointer; font-size:0.96rem;
@@ -154,6 +162,57 @@
     padding:13px; border-radius:12px; background:transparent; border:1.5px solid var(--line);
     color:var(--ink-soft); font-weight:600; cursor:pointer; font-size:0.9rem;
   }
+
+  /* ---------- MENU: extras (modo, nombres, enlaces) ---------- */
+  .names-container{ display:flex; flex-direction:column; gap:10px; }
+  .name-input{
+    width:100%; padding:11px 14px; border-radius:12px; border:1.5px solid var(--line);
+    background:var(--panel-2); color:var(--ink); font-size:0.95rem; font-weight:500;
+  }
+  .name-input:focus-visible{ outline:2px solid var(--accent); outline-offset:1px; }
+  .cpu-name-badge{
+    display:inline-flex; align-items:center; gap:6px; padding:11px 14px; border-radius:12px;
+    background:var(--panel-2); border:1.5px dashed var(--line); color:var(--ink-soft); font-weight:600; font-size:0.9rem;
+  }
+  .menu-links{ display:flex; flex-direction:column; gap:4px; margin-top:16px; }
+  .text-link{
+    background:none; border:none; color:var(--ink-soft); font-weight:600; font-size:0.86rem;
+    padding:6px 2px; text-align:left; cursor:pointer;
+  }
+  .text-link:hover{ color:var(--accent); }
+
+  /* ---------- AJUSTES ---------- */
+  .settings-row{ display:flex; flex-direction:column; gap:8px; margin-bottom:18px; text-align:left; }
+  .settings-row > span{ font-weight:600; font-size:0.88rem; color:var(--ink-soft); }
+
+  /* ---------- ESTADÍSTICAS ---------- */
+  .stats-row{
+    display:flex; justify-content:space-between; gap:10px; padding:9px 0; border-bottom:1px solid var(--line);
+    font-size:0.92rem;
+  }
+  .stats-row span:last-child{ font-weight:700; white-space:nowrap; }
+  .streak-line{ margin:14px 0 0 !important; text-align:center; font-style:italic; }
+
+  /* ---------- FICHAS (skins) ---------- */
+  .slot-tabs{ display:flex; gap:8px; justify-content:center; margin-bottom:18px; }
+  .slot-tab{ width:36px; height:36px; border-radius:50%; border:2.5px solid transparent; cursor:pointer; padding:0; }
+  .slot-tab.active{ border-color:var(--ink); }
+  .skin-preview{ display:flex; justify-content:center; margin-bottom:16px; }
+  .swatch-label{ font-size:0.8rem; font-weight:600; color:var(--ink-soft); margin:14px 0 8px; text-align:center; }
+  .swatch-grid{ display:flex; gap:8px; flex-wrap:wrap; justify-content:center; }
+  .color-swatch{ width:34px; height:34px; border-radius:50%; border:2.5px solid transparent; cursor:pointer; padding:0; }
+  .color-swatch.selected{ border-color:var(--ink); }
+  .shape-swatch{
+    width:40px; height:40px; border-radius:10px; border:1.5px solid var(--line); background:var(--panel-2);
+    cursor:pointer; display:flex; align-items:center; justify-content:center; padding:4px;
+  }
+  .shape-swatch.selected{ border-color:var(--accent); border-width:2px; background:var(--panel); }
+
+  /* ---------- TUTORIAL ---------- */
+  .tutorial-steps{ display:flex; flex-direction:column; gap:14px; margin:0 0 20px; }
+  .tutorial-step{ display:flex; gap:12px; align-items:flex-start; }
+  .tutorial-step .emoji{ font-size:1.4rem; line-height:1.3; flex:0 0 auto; }
+  .tutorial-step p{ margin:0; color:var(--ink); font-size:0.92rem; line-height:1.5; }
 
   /* ---------- ANIMATIONS ---------- */
   @keyframes piecePop{ 0%{ transform:scale(0.35); opacity:0.3; } 65%{ transform:scale(1.18); } 100%{ transform:scale(1); opacity:1; } }
@@ -192,6 +251,22 @@
     <p class="subtitle">Movete por el tablero y colocá paredes para bloquear a tus rivales. Gana quien llegue primero al centro.</p>
 
     <fieldset>
+      <legend>Modo de juego</legend>
+      <div class="segmented" id="modeGroup">
+        <input type="radio" name="gmode" id="modeLocal" value="local" checked><label for="modeLocal">👥 Local</label>
+        <input type="radio" name="gmode" id="modeCpu" value="cpu"><label for="modeCpu">🤖 Vs. IA</label>
+      </div>
+    </fieldset>
+
+    <fieldset id="difficultyFieldset" class="hidden">
+      <legend>Dificultad de la IA</legend>
+      <div class="segmented">
+        <input type="radio" name="difficulty" id="diffEasy" value="easy" checked><label for="diffEasy">Fácil</label>
+        <input type="radio" name="difficulty" id="diffHard" value="hard"><label for="diffHard">Difícil</label>
+      </div>
+    </fieldset>
+
+    <fieldset id="playersFieldset">
       <legend>Cantidad de jugadores</legend>
       <div class="segmented" id="playersGroup">
         <input type="radio" name="players" id="p2" value="2" checked><label for="p2">2</label>
@@ -210,7 +285,19 @@
       </div>
     </fieldset>
 
+    <fieldset>
+      <legend>Nombres</legend>
+      <div class="names-container" id="namesContainer"></div>
+    </fieldset>
+
     <button id="startBtn">Comenzar partida</button>
+
+    <div class="menu-links">
+      <button type="button" class="text-link" id="settingsLinkBtn">⚙️ Ajustes</button>
+      <button type="button" class="text-link" id="skinsLinkBtn">🎨 Personalizar fichas</button>
+      <button type="button" class="text-link" id="statsLinkBtn">📊 Ver estadísticas</button>
+      <button type="button" class="text-link" id="helpLinkBtn">❓ Cómo se juega</button>
+    </div>
   </div>
 </div>
 
@@ -221,6 +308,7 @@
       <div id="turnIndicator"></div>
     </div>
     <div class="header-actions">
+      <button class="ghost-btn" id="settingsBtn" aria-label="Ajustes" title="Ajustes">⚙️</button>
       <button class="ghost-btn" id="restartBtn">Reiniciar</button>
       <button class="ghost-btn" id="menuBtn">Menú</button>
     </div>
@@ -255,13 +343,83 @@
   </div>
 </div>
 
-<div id="winOverlay" class="hidden">
-  <div class="win-card" id="winCard">
+<div id="winOverlay" class="overlay-backdrop hidden">
+  <div class="modal-card accent-border" id="winCard">
     <h2 id="winTitle"></h2>
     <p>Podés jugar otra ronda con la misma configuración o cambiar los ajustes.</p>
-    <div class="win-actions">
+    <div class="modal-actions">
       <button class="primary-btn" id="playAgainBtn">Jugar de nuevo</button>
       <button class="secondary-btn" id="changeConfigBtn">Cambiar configuración</button>
+    </div>
+  </div>
+</div>
+
+<div id="confirmOverlay" class="overlay-backdrop hidden">
+  <div class="modal-card" id="confirmCard">
+    <h2>¿Estás seguro?</h2>
+    <p id="confirmMessage"></p>
+    <div class="modal-actions">
+      <button class="primary-btn" id="confirmYesBtn">Sí, continuar</button>
+      <button class="secondary-btn" id="confirmNoBtn">Cancelar</button>
+    </div>
+  </div>
+</div>
+
+<div id="settingsOverlay" class="overlay-backdrop hidden">
+  <div class="modal-card" id="settingsCard">
+    <h2>Ajustes</h2>
+    <div class="settings-row">
+      <span>Tema</span>
+      <div class="segmented" id="settingsThemeGroup">
+        <input type="radio" name="settingsTheme" id="stSystem" value="system"><label for="stSystem">🖥️ Auto</label>
+        <input type="radio" name="settingsTheme" id="stLight" value="light"><label for="stLight">☀️ Claro</label>
+        <input type="radio" name="settingsTheme" id="stDark" value="dark"><label for="stDark">🌙 Oscuro</label>
+      </div>
+    </div>
+    <div class="settings-row">
+      <span>Sonido y vibración</span>
+      <button type="button" class="ghost-btn" id="settingsSoundBtn"></button>
+    </div>
+    <div class="modal-actions">
+      <button class="secondary-btn" id="closeSettingsBtn">Cerrar</button>
+    </div>
+  </div>
+</div>
+
+<div id="tutorialOverlay" class="overlay-backdrop hidden">
+  <div class="modal-card wide" id="tutorialCard">
+    <h2>Cómo se juega Quoridor</h2>
+    <div class="tutorial-steps">
+      <div class="tutorial-step"><span class="emoji">🎯</span><p><strong>Objetivo:</strong> sé el primero en llegar a la casilla del centro, marcada con el anillo dorado.</p></div>
+      <div class="tutorial-step"><span class="emoji">🚶</span><p><strong>Mover:</strong> con el modo "Mover" activo, tocá una de las casillas resaltadas para desplazar tu ficha ahí.</p></div>
+      <div class="tutorial-step"><span class="emoji">🧱</span><p><strong>Pared:</strong> activá "Colocar pared", arrastrá el dedo sobre el tablero para elegir dónde ubicarla y soltá para confirmar. Ninguna pared puede dejar a un jugador sin camino posible al centro.</p></div>
+      <div class="tutorial-step"><span class="emoji">🔁</span><p><strong>Turnos:</strong> cada jugador tiene una cantidad limitada de paredes. Cuando se acaban, solo se puede mover.</p></div>
+    </div>
+    <p style="text-align:center; font-size:0.82rem; color:var(--ink-soft);">Podés volver a ver esta ayuda tocando "❓ Cómo se juega" en el menú.</p>
+    <div class="modal-actions">
+      <button class="primary-btn" id="closeTutorialBtn">¡Entendido, a jugar!</button>
+    </div>
+  </div>
+</div>
+
+<div id="statsOverlay" class="overlay-backdrop hidden">
+  <div class="modal-card wide" id="statsCard">
+    <h2>Estadísticas</h2>
+    <div id="statsBody"></div>
+    <div class="modal-actions">
+      <button class="secondary-btn" id="resetStatsBtn">Reiniciar estadísticas</button>
+      <button class="primary-btn" id="closeStatsBtn">Cerrar</button>
+    </div>
+  </div>
+</div>
+
+<div id="skinsOverlay" class="overlay-backdrop hidden">
+  <div class="modal-card wide" id="skinsCard">
+    <h2>Personalizar fichas</h2>
+    <div id="skinsBody"></div>
+    <div class="modal-actions">
+      <button class="secondary-btn" id="resetSkinsBtn">Restablecer</button>
+      <button class="primary-btn" id="closeSkinsBtn">Cerrar</button>
     </div>
   </div>
 </div>
@@ -278,6 +436,9 @@
     { name:'Jugador 3', color:'#4f8a63', shape:'triangle' },
     { name:'Jugador 4', color:'#e0973c', shape:'diamond' },
   ];
+  const SKIN_COLORS = ['#d64550','#3a6ea5','#4f8a63','#e0973c','#8e5fb0','#2f9e97','#c25b9c','#6b7280'];
+  const SKIN_SHAPES = ['circle','square','triangle','diamond','star','hex'];
+  const SHAPE_LABEL = { circle:'Círculo', square:'Cuadrado', triangle:'Triángulo', diamond:'Rombo', star:'Estrella', hex:'Hexágono' };
 
   // ---------- DOM refs ----------
   const menuScreen = document.getElementById('menuScreen');
@@ -285,6 +446,7 @@
   const startBtn = document.getElementById('startBtn');
   const restartBtn = document.getElementById('restartBtn');
   const menuBtn = document.getElementById('menuBtn');
+  const settingsBtn = document.getElementById('settingsBtn');
   const turnIndicator = document.getElementById('turnIndicator');
   const playersListEl = document.getElementById('playersList');
   const boardSvg = document.getElementById('boardSvg');
@@ -302,10 +464,54 @@
   const wallModeBtn = document.getElementById('wallModeBtn');
   const hintLine = document.getElementById('hintLine');
 
+  const difficultyFieldset = document.getElementById('difficultyFieldset');
+  const playersFieldset = document.getElementById('playersFieldset');
+  const namesContainer = document.getElementById('namesContainer');
+  const settingsLinkBtn = document.getElementById('settingsLinkBtn');
+  const skinsLinkBtn = document.getElementById('skinsLinkBtn');
+  const statsLinkBtn = document.getElementById('statsLinkBtn');
+  const helpLinkBtn = document.getElementById('helpLinkBtn');
+
+  const confirmOverlay = document.getElementById('confirmOverlay');
+  const confirmMessage = document.getElementById('confirmMessage');
+  const confirmYesBtn = document.getElementById('confirmYesBtn');
+  const confirmNoBtn = document.getElementById('confirmNoBtn');
+
+  const settingsOverlay = document.getElementById('settingsOverlay');
+  const settingsThemeGroup = document.getElementById('settingsThemeGroup');
+  const settingsSoundBtn = document.getElementById('settingsSoundBtn');
+  const closeSettingsBtn = document.getElementById('closeSettingsBtn');
+
+  const tutorialOverlay = document.getElementById('tutorialOverlay');
+  const closeTutorialBtn = document.getElementById('closeTutorialBtn');
+
+  const statsOverlay = document.getElementById('statsOverlay');
+  const statsBody = document.getElementById('statsBody');
+  const resetStatsBtn = document.getElementById('resetStatsBtn');
+  const closeStatsBtn = document.getElementById('closeStatsBtn');
+
+  const skinsOverlay = document.getElementById('skinsOverlay');
+  const skinsBody = document.getElementById('skinsBody');
+  const resetSkinsBtn = document.getElementById('resetSkinsBtn');
+  const closeSkinsBtn = document.getElementById('closeSkinsBtn');
+
+  const overlayEls = { win:winOverlay, confirm:confirmOverlay, settings:settingsOverlay, tutorial:tutorialOverlay, stats:statsOverlay, skins:skinsOverlay };
+
   let state = null;
   let mode = 'move'; // 'move' | 'wall'
+  let overlayStack = [];
+  let pendingConfirmAction = null;
+  let activeSkinSlot = 0;
+  let audioCtx = null;
+  let botTimer = null;
+  let botToken = 0;
 
-  // ---------- helpers ----------
+  // ---------- utilidades ----------
+  function escapeHtml(str){
+    return String(str).replace(/[&<>"']/g, function(ch){
+      return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[ch];
+    });
+  }
   function cellSize(){ return BOARD_PX / state.size; }
 
   function edgeKey(r1,c1,r2,c2){
@@ -342,6 +548,25 @@
       }
     }
     return false;
+  }
+  function distanceToCenter(r, c, blockedSet){
+    if(r===state.center.r && c===state.center.c) return 0;
+    const visited = new Set([r+','+c]);
+    const queue = [[r,c,0]];
+    while(queue.length){
+      const [cr,cc,d] = queue.shift();
+      for(const [dr,dc] of DIRS4){
+        const nr=cr+dr, nc=cc+dc;
+        if(nr<0||nc<0||nr>=state.size||nc>=state.size) continue;
+        const key = nr+','+nc;
+        if(visited.has(key)) continue;
+        if(isBlocked(cr,cc,nr,nc,blockedSet)) continue;
+        if(nr===state.center.r && nc===state.center.c) return d+1;
+        visited.add(key);
+        queue.push([nr,nc,d+1]);
+      }
+    }
+    return Infinity;
   }
 
   function wallEdges(r,c,orientation){
@@ -437,9 +662,277 @@
     mode = 'move';
   }
 
+  // ---------- overlays genéricos ----------
+  function openOverlay(name){
+    const el = overlayEls[name];
+    if(!el) return;
+    el.classList.remove('hidden');
+    overlayStack.push(name);
+    if(!gameScreen.classList.contains('hidden')) invalidateBotTimer();
+  }
+  function closeOverlay(name){
+    const el = overlayEls[name];
+    if(!el) return;
+    el.classList.add('hidden');
+    overlayStack = overlayStack.filter(n=> n!==name);
+    if(name==='tutorial'){
+      try{ localStorage.setItem('quoridor_tutorial_seen','1'); }catch(e){}
+    }
+    if(overlayStack.length===0 && !gameScreen.classList.contains('hidden') && state && !state.winner){
+      scheduleBotTurnIfNeeded();
+    }
+  }
+  function closeTopOverlay(){
+    if(!overlayStack.length) return false;
+    closeOverlay(overlayStack[overlayStack.length-1]);
+    return true;
+  }
+
+  // ---------- confirmación reutilizable (reinicio/salir/borrar stats) ----------
+  function showConfirm(message, onConfirm){
+    confirmMessage.textContent = message;
+    pendingConfirmAction = onConfirm;
+    openOverlay('confirm');
+  }
+  confirmYesBtn.addEventListener('click', ()=>{
+    const action = pendingConfirmAction;
+    pendingConfirmAction = null;
+    closeOverlay('confirm');
+    if(action) action();
+  });
+  confirmNoBtn.addEventListener('click', ()=>{
+    pendingConfirmAction = null;
+    closeOverlay('confirm');
+  });
+  function matchInProgress(){ return !!state && !state.winner; }
+
+  // ---------- tema claro/oscuro ----------
+  function loadThemePref(){
+    try{ return localStorage.getItem('quoridor_theme') || 'system'; }catch(e){ return 'system'; }
+  }
+  function applyTheme(pref){
+    if(pref==='light') document.documentElement.setAttribute('data-theme','light');
+    else if(pref==='dark') document.documentElement.setAttribute('data-theme','dark');
+    else document.documentElement.removeAttribute('data-theme');
+    try{ localStorage.setItem('quoridor_theme', pref); }catch(e){}
+  }
+
+  // ---------- sonido y vibración (Web Audio + Vibration API, sin plugins nativos) ----------
+  function loadSoundPref(){
+    try{ return localStorage.getItem('quoridor_muted')==='1'; }catch(e){ return false; }
+  }
+  let muted = loadSoundPref();
+  function setMuted(v){
+    muted = v;
+    try{ localStorage.setItem('quoridor_muted', v ? '1':'0'); }catch(e){}
+  }
+  function getAudioCtx(){
+    if(audioCtx) return audioCtx;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if(!AC) return null;
+    try{ audioCtx = new AC(); }catch(e){ audioCtx = null; }
+    return audioCtx;
+  }
+  function playTone(freq, duration, type, gainStart){
+    if(muted) return;
+    const ctx = getAudioCtx();
+    if(!ctx) return;
+    if(ctx.state==='suspended'){ try{ ctx.resume(); }catch(e){} }
+    try{
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = type || 'sine';
+      osc.frequency.setValueAtTime(freq, ctx.currentTime);
+      gain.gain.setValueAtTime(gainStart!=null ? gainStart : 0.16, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + duration);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + duration);
+    }catch(e){}
+  }
+  function playMoveSound(){ playTone(440, 0.09, 'sine', 0.14); }
+  function playWallSound(){ playTone(170, 0.15, 'square', 0.15); }
+  function playWinSound(){
+    if(muted) return;
+    [523.25,659.25,783.99].forEach((f,i)=>{
+      setTimeout(()=> playTone(f, 0.24, 'triangle', 0.17), i*110);
+    });
+  }
+  function vibrate(pattern){
+    if(muted) return;
+    try{ if(navigator.vibrate) navigator.vibrate(pattern); }catch(e){}
+  }
+  function updateSettingsSoundBtn(){
+    settingsSoundBtn.textContent = muted ? '🔇 Silenciado — tocar para activar' : '🔊 Activado — tocar para silenciar';
+  }
+
+  // ---------- estadísticas locales ----------
+  function loadStats(){
+    try{
+      const raw = localStorage.getItem('quoridor_stats');
+      if(raw){
+        const parsed = JSON.parse(raw);
+        return {
+          totalGames: parsed.totalGames || 0,
+          winsBySlot: Array.isArray(parsed.winsBySlot) ? [0,1,2,3].map(i=> parsed.winsBySlot[i]||0) : [0,0,0,0],
+          streak: (parsed.streak && typeof parsed.streak.count==='number') ? parsed.streak : { slot:null, count:0 },
+          vsCpu: parsed.vsCpu || { played:0, won:0 },
+        };
+      }
+    }catch(e){}
+    return { totalGames:0, winsBySlot:[0,0,0,0], streak:{slot:null,count:0}, vsCpu:{played:0,won:0} };
+  }
+  function saveStats(){ try{ localStorage.setItem('quoridor_stats', JSON.stringify(statsData)); }catch(e){} }
+  let statsData = loadStats();
+  function recordGameResult(winnerSlot, isCpuGame){
+    statsData.totalGames += 1;
+    statsData.winsBySlot[winnerSlot] = (statsData.winsBySlot[winnerSlot]||0) + 1;
+    if(statsData.streak.slot === winnerSlot){
+      statsData.streak.count += 1;
+    } else {
+      statsData.streak.slot = winnerSlot;
+      statsData.streak.count = 1;
+    }
+    if(isCpuGame){
+      statsData.vsCpu.played += 1;
+      if(winnerSlot === 0) statsData.vsCpu.won += 1;
+    }
+    saveStats();
+  }
+  function renderStatsOverlay(){
+    const names = loadPlayerNames();
+    let rows = '';
+    for(let i=0;i<4;i++){
+      const wins = statsData.winsBySlot[i] || 0;
+      const nm = escapeHtml(names[i] && names[i].trim() ? names[i].trim() : PALETTE[i].name);
+      rows += `<div class="stats-row"><span>${nm}</span><span>${wins} 🏆</span></div>`;
+    }
+    let streakText = 'Todavía no hay una racha activa.';
+    if(statsData.streak && statsData.streak.count>=2 && statsData.streak.slot!=null){
+      const nm = escapeHtml(names[statsData.streak.slot] && names[statsData.streak.slot].trim() ? names[statsData.streak.slot].trim() : PALETTE[statsData.streak.slot].name);
+      streakText = `🔥 ${nm} lleva ${statsData.streak.count} victorias seguidas.`;
+    }
+    const cpuRow = statsData.vsCpu.played>0
+      ? `<div class="stats-row"><span>Contra la IA</span><span>${statsData.vsCpu.won} de ${statsData.vsCpu.played}</span></div>`
+      : '';
+    statsBody.innerHTML = `
+      <div class="stats-row"><span>Partidas jugadas</span><span>${statsData.totalGames}</span></div>
+      ${rows}
+      ${cpuRow}
+      <p class="streak-line">${streakText}</p>
+    `;
+  }
+  resetStatsBtn.addEventListener('click', ()=>{
+    showConfirm('¿Reiniciar todas las estadísticas guardadas? No se puede deshacer.', ()=>{
+      statsData = { totalGames:0, winsBySlot:[0,0,0,0], streak:{slot:null,count:0}, vsCpu:{played:0,won:0} };
+      saveStats();
+      renderStatsOverlay();
+    });
+  });
+  statsLinkBtn.addEventListener('click', ()=>{ renderStatsOverlay(); openOverlay('stats'); });
+  closeStatsBtn.addEventListener('click', ()=> closeOverlay('stats'));
+
+  // ---------- nombres de jugadores (persistidos) ----------
+  function loadPlayerNames(){
+    try{
+      const raw = localStorage.getItem('quoridor_playerNames');
+      if(raw){
+        const arr = JSON.parse(raw);
+        if(Array.isArray(arr)) return [arr[0]||'', arr[1]||'', arr[2]||'', arr[3]||''];
+      }
+    }catch(e){}
+    return ['','','',''];
+  }
+  function savePlayerNames(arr){
+    try{ localStorage.setItem('quoridor_playerNames', JSON.stringify(arr)); }catch(e){}
+  }
+
+  // ---------- fichas / skins ----------
+  function defaultSkins(){ return PALETTE.map(p=> ({ color:p.color, shape:p.shape })); }
+  function loadSkins(){
+    try{
+      const raw = localStorage.getItem('quoridor_pieceSkins');
+      if(raw){
+        const arr = JSON.parse(raw);
+        if(Array.isArray(arr) && arr.length===4){
+          return arr.map((s,i)=> ({
+            color: (s && s.color) || PALETTE[i].color,
+            shape: (s && s.shape) || PALETTE[i].shape,
+          }));
+        }
+      }
+    }catch(e){}
+    return defaultSkins();
+  }
+  function saveSkins(){ try{ localStorage.setItem('quoridor_pieceSkins', JSON.stringify(pieceSkins)); }catch(e){} }
+  let pieceSkins = loadSkins();
+
+  function renderSkinsOverlay(){
+    const tabsHtml = pieceSkins.map((s,i)=>
+      `<button type="button" class="slot-tab ${i===activeSkinSlot?'active':''}" data-slot="${i}" style="background:${s.color}" aria-label="Editar ficha ${i+1}"></button>`
+    ).join('');
+    const current = pieceSkins[activeSkinSlot];
+    const previewHtml = smallShapeSVG(current.shape, current.color, 64);
+    const colorsHtml = SKIN_COLORS.map(c=>{
+      const sel = c===current.color ? 'selected' : '';
+      return `<button type="button" class="color-swatch ${sel}" data-color="${c}" style="background:${c}" aria-label="Color ${c}"></button>`;
+    }).join('');
+    const shapesHtml = SKIN_SHAPES.map(sh=>{
+      const sel = sh===current.shape ? 'selected' : '';
+      return `<button type="button" class="shape-swatch ${sel}" data-shape="${sh}" aria-label="${SHAPE_LABEL[sh]}">${smallShapeSVG(sh,'var(--ink)',22)}</button>`;
+    }).join('');
+    skinsBody.innerHTML = `
+      <div class="slot-tabs">${tabsHtml}</div>
+      <div class="skin-preview">${previewHtml}</div>
+      <p class="swatch-label">Color</p>
+      <div class="swatch-grid">${colorsHtml}</div>
+      <p class="swatch-label">Forma</p>
+      <div class="swatch-grid">${shapesHtml}</div>
+    `;
+  }
+  function setSkinColor(slot, color){
+    const currentColorOfSlot = pieceSkins[slot].color;
+    const otherIdx = pieceSkins.findIndex((s,i)=> i!==slot && s.color===color);
+    pieceSkins[slot].color = color;
+    if(otherIdx!==-1){
+      pieceSkins[otherIdx].color = currentColorOfSlot;
+    }
+    saveSkins();
+    renderSkinsOverlay();
+  }
+  skinsBody.addEventListener('click', e=>{
+    const tab = e.target.closest('.slot-tab');
+    if(tab){ activeSkinSlot = +tab.dataset.slot; renderSkinsOverlay(); return; }
+    const colorBtn = e.target.closest('.color-swatch');
+    if(colorBtn){ setSkinColor(activeSkinSlot, colorBtn.dataset.color); return; }
+    const shapeBtn = e.target.closest('.shape-swatch');
+    if(shapeBtn){ pieceSkins[activeSkinSlot].shape = shapeBtn.dataset.shape; saveSkins(); renderSkinsOverlay(); return; }
+  });
+  resetSkinsBtn.addEventListener('click', ()=>{
+    pieceSkins = defaultSkins();
+    saveSkins();
+    renderSkinsOverlay();
+  });
+  skinsLinkBtn.addEventListener('click', ()=>{ renderSkinsOverlay(); openOverlay('skins'); });
+  closeSkinsBtn.addEventListener('click', ()=> closeOverlay('skins'));
+
+  // ---------- último setup usado ----------
+  function loadLastSetup(){
+    try{
+      const raw = localStorage.getItem('quoridor_lastSetup');
+      if(raw) return JSON.parse(raw);
+    }catch(e){}
+    return null;
+  }
+  function saveLastSetup(cfg){
+    try{ localStorage.setItem('quoridor_lastSetup', JSON.stringify(cfg)); }catch(e){}
+  }
+
   // ---------- move / wall mode toggle (tap-friendly, works with touch and mouse) ----------
   function setMode(m){
     if(!state || state.winner) return;
+    const cpNow = state.players[state.currentPlayerIndex];
+    if(cpNow && cpNow.isCPU) return;
     if(m==='wall'){
       const cp = state.players[state.currentPlayerIndex];
       if(!cp || cp.wallsLeft<=0) return;
@@ -451,10 +944,13 @@
   }
   function updateModeUI(){
     const cp = state && state.players[state.currentPlayerIndex];
-    const canWall = !!cp && cp.wallsLeft>0 && !state.winner;
+    const canWall = !!cp && cp.wallsLeft>0 && !(state && state.winner);
+    const isHumanTurn = !cp || !cp.isCPU;
     moveModeBtn.classList.toggle('active', mode==='move');
     wallModeBtn.classList.toggle('active', mode==='wall');
-    wallModeBtn.disabled = !canWall;
+    moveModeBtn.disabled = !isHumanTurn;
+    wallModeBtn.disabled = !canWall || !isHumanTurn;
+    hintLine.classList.remove('thinking');
     if(state && state.winner){ hintLine.textContent=''; return; }
     hintLine.textContent = mode==='wall'
       ? 'Arrastrá sobre el tablero para ubicar la pared y soltá para confirmarla.'
@@ -463,6 +959,91 @@
   moveModeBtn.addEventListener('click', ()=> setMode('move'));
   wallModeBtn.addEventListener('click', ()=> setMode('wall'));
 
+  // ---------- IA (bot) ----------
+  function invalidateBotTimer(){
+    botToken++;
+    if(botTimer){ clearTimeout(botTimer); botTimer=null; }
+  }
+  function otherPlayerClosestToCenter(excludeIdx){
+    let best=null, bestDist=Infinity;
+    state.players.forEach((p,i)=>{
+      if(i===excludeIdx) return;
+      const d = distanceToCenter(p.r,p.c,state.blockedEdges);
+      if(d<bestDist){ bestDist=d; best=i; }
+    });
+    return best;
+  }
+  function findBestBlockingWall(opponentIdx, currentOppDist){
+    const opp = state.players[opponentIdx];
+    const radius = 2;
+    const minSlot = 0, maxSlot = state.size-2;
+    let candidates = [];
+    for(let r=Math.max(minSlot,opp.r-radius); r<=Math.min(maxSlot,opp.r+radius); r++){
+      for(let c=Math.max(minSlot,opp.c-radius); c<=Math.min(maxSlot,opp.c+radius); c++){
+        for(const orientation of ['h','v']){
+          const evalRes = evaluateWallPlacement(r,c,orientation);
+          if(!evalRes.valid) continue;
+          const testSet = new Set(state.blockedEdges);
+          evalRes.edges.forEach(e=> testSet.add(edgeKey(e[0],e[1],e[2],e[3])));
+          const newOppDist = distanceToCenter(opp.r,opp.c,testSet);
+          if(newOppDist > currentOppDist){
+            candidates.push({ r, c, orientation, gain: newOppDist - currentOppDist });
+          }
+        }
+      }
+    }
+    if(!candidates.length) return null;
+    candidates.sort((a,b)=> b.gain - a.gain);
+    const topGain = candidates[0].gain;
+    const bestOnes = candidates.filter(cd=> cd.gain===topGain);
+    return bestOnes[Math.floor(Math.random()*bestOnes.length)];
+  }
+  function botPlanMove(idx){
+    const bot = state.players[idx];
+    const difficulty = bot.difficulty || 'easy';
+    if(bot.wallsLeft > 0){
+      const opponentIdx = otherPlayerClosestToCenter(idx);
+      if(opponentIdx!=null){
+        const myDist = distanceToCenter(bot.r, bot.c, state.blockedEdges);
+        const oppDist = distanceToCenter(state.players[opponentIdx].r, state.players[opponentIdx].c, state.blockedEdges);
+        const wallChance = difficulty==='hard' ? 0.72 : 0.28;
+        if(oppDist <= myDist && Math.random() < wallChance){
+          const wallMove = findBestBlockingWall(opponentIdx, oppDist);
+          if(wallMove) return { type:'wall', r:wallMove.r, c:wallMove.c, orientation:wallMove.orientation };
+        }
+      }
+    }
+    const validMoves = state.validMoves;
+    if(!validMoves.length) return { type:'move', r:bot.r, c:bot.c };
+    const scored = validMoves.map(m=> ({ m, d: distanceToCenter(m.r, m.c, state.blockedEdges) }));
+    scored.sort((a,b)=> a.d-b.d);
+    const randomness = difficulty==='hard' ? 0.1 : 0.3;
+    let choice;
+    if(scored.length>1 && Math.random()<randomness){
+      choice = scored[Math.floor(Math.random()*scored.length)];
+    } else {
+      choice = scored[0];
+    }
+    return { type:'move', r:choice.m.r, c:choice.m.c };
+  }
+  function scheduleBotTurnIfNeeded(){
+    if(!state || state.winner) return;
+    const cp = state.players[state.currentPlayerIndex];
+    if(!cp || !cp.isCPU) return;
+    const myToken = ++botToken;
+    hintLine.textContent = 'La IA está pensando…';
+    hintLine.classList.add('thinking');
+    botTimer = setTimeout(()=>{
+      if(myToken!==botToken) return;
+      if(!state || state.winner) return;
+      const cpNow = state.players[state.currentPlayerIndex];
+      if(!cpNow || !cpNow.isCPU) return;
+      const decision = botPlanMove(state.currentPlayerIndex);
+      if(decision.type==='move') performMove(decision.r, decision.c);
+      else commitWall(decision.r, decision.c, decision.orientation);
+    }, 550 + Math.random()*450);
+  }
+
   function performMove(r,c){
     if(state.winner) return;
     const idx = state.currentPlayerIndex;
@@ -470,10 +1051,15 @@
     p.r = r; p.c = c;
     if(r===state.center.r && c===state.center.c){
       state.winner = p;
+      recordGameResult(p.id, !!state.isCpuGame);
       render(idx);
+      playWinSound();
+      vibrate([0,40,60,40,140]);
       showWinOverlay(p);
       return;
     }
+    playMoveSound();
+    vibrate(12);
     advanceTurn();
     render(idx);
   }
@@ -487,6 +1073,8 @@
     evalRes.edges.forEach(e=> state.blockedEdges.add(edgeKey(e[0],e[1],e[2],e[3])));
     state.walls.push({ r, c, orientation, color: cp.color });
     cp.wallsLeft -= 1;
+    playWallSound();
+    vibrate(18);
     advanceTurn();
     render();
   }
@@ -507,6 +1095,25 @@
         const pts = `${cx},${cy-h} ${cx+h},${cy} ${cx},${cy+h} ${cx-h},${cy}`;
         return `<polygon points="${pts}" fill="${color}" stroke="rgba(0,0,0,0.25)" stroke-width="1.5" filter="url(#pieceShadow)" class="${extraClass}"/>`;
       }
+      case 'star': {
+        const outerR = size*0.56, innerR = outerR*0.42;
+        const pts = [];
+        for(let i=0;i<10;i++){
+          const ang = -Math.PI/2 + i*Math.PI/5;
+          const rr = i%2===0 ? outerR : innerR;
+          pts.push(`${cx+rr*Math.cos(ang)},${cy+rr*Math.sin(ang)}`);
+        }
+        return `<polygon points="${pts.join(' ')}" fill="${color}" stroke="rgba(0,0,0,0.25)" stroke-width="1.5" filter="url(#pieceShadow)" class="${extraClass}"/>`;
+      }
+      case 'hex': {
+        const rr = size*0.58;
+        const pts = [];
+        for(let i=0;i<6;i++){
+          const ang = Math.PI/6 + i*Math.PI/3;
+          pts.push(`${cx+rr*Math.cos(ang)},${cy+rr*Math.sin(ang)}`);
+        }
+        return `<polygon points="${pts.join(' ')}" fill="${color}" stroke="rgba(0,0,0,0.25)" stroke-width="1.5" filter="url(#pieceShadow)" class="${extraClass}"/>`;
+      }
       default:
         return `<circle cx="${cx}" cy="${cy}" r="${half}" fill="${color}" stroke="rgba(0,0,0,0.25)" stroke-width="1.5" filter="url(#pieceShadow)" class="${extraClass}"/>`;
     }
@@ -517,6 +1124,25 @@
       case 'square': return `<svg width="${s}" height="${s}" viewBox="0 0 ${s} ${s}"><rect x="1" y="1" width="${s-2}" height="${s-2}" rx="3" fill="${color}"/></svg>`;
       case 'triangle': return `<svg width="${s}" height="${s}" viewBox="0 0 ${s} ${s}"><polygon points="${half},2 ${s-2},${s-2} 2,${s-2}" fill="${color}"/></svg>`;
       case 'diamond': return `<svg width="${s}" height="${s}" viewBox="0 0 ${s} ${s}"><polygon points="${half},1 ${s-1},${half} ${half},${s-1} 1,${half}" fill="${color}"/></svg>`;
+      case 'star': {
+        const outerR = half-1, innerR = outerR*0.42;
+        const pts = [];
+        for(let i=0;i<10;i++){
+          const ang = -Math.PI/2 + i*Math.PI/5;
+          const rr = i%2===0 ? outerR : innerR;
+          pts.push(`${(half+rr*Math.cos(ang)).toFixed(2)},${(half+rr*Math.sin(ang)).toFixed(2)}`);
+        }
+        return `<svg width="${s}" height="${s}" viewBox="0 0 ${s} ${s}"><polygon points="${pts.join(' ')}" fill="${color}"/></svg>`;
+      }
+      case 'hex': {
+        const rr = half-1;
+        const pts = [];
+        for(let i=0;i<6;i++){
+          const ang = Math.PI/6 + i*Math.PI/3;
+          pts.push(`${(half+rr*Math.cos(ang)).toFixed(2)},${(half+rr*Math.sin(ang)).toFixed(2)}`);
+        }
+        return `<svg width="${s}" height="${s}" viewBox="0 0 ${s} ${s}"><polygon points="${pts.join(' ')}" fill="${color}"/></svg>`;
+      }
       default: return `<svg width="${s}" height="${s}" viewBox="0 0 ${s} ${s}"><circle cx="${half}" cy="${half}" r="${half-1}" fill="${color}"/></svg>`;
     }
   }
@@ -542,12 +1168,12 @@
     gridEl.innerHTML = gridHTML;
 
     let movesHTML = '';
-    if(!state.winner){
-      const cp = state.players[state.currentPlayerIndex];
+    const activePlayer = state.players[state.currentPlayerIndex];
+    if(!state.winner && activePlayer && !activePlayer.isCPU){
       for(const m of state.validMoves){
         const cx=(m.c+0.5)*cs, cy=(m.r+0.5)*cs;
-        movesHTML += `<circle cx="${cx}" cy="${cy}" r="${cs*0.16}" fill="${cp.color}" class="move-dot" opacity="0.8"/>`;
-        movesHTML += `<rect data-r="${m.r}" data-c="${m.c}" x="${m.c*cs}" y="${m.r*cs}" width="${cs}" height="${cs}" fill="transparent" pointer-events="all" style="--tint:${cp.color}" class="valid-move-hit"/>`;
+        movesHTML += `<circle cx="${cx}" cy="${cy}" r="${cs*0.16}" fill="${activePlayer.color}" class="move-dot" opacity="0.8"/>`;
+        movesHTML += `<rect data-r="${m.r}" data-c="${m.c}" x="${m.c*cs}" y="${m.r*cs}" width="${cs}" height="${cs}" fill="transparent" pointer-events="all" style="--tint:${activePlayer.color}" class="valid-move-hit"/>`;
       }
     }
     movesEl.innerHTML = movesHTML;
@@ -575,6 +1201,7 @@
     updateHeader();
     updateSidePanel();
     updateModeUI();
+    scheduleBotTurnIfNeeded();
   }
 
   function updateHeader(){
@@ -592,9 +1219,10 @@
     playersListEl.innerHTML = state.players.map((p,i)=>{
       const active = (i===state.currentPlayerIndex && !state.winner);
       const bg = active ? hexToRgba(p.color,0.12) : 'transparent';
+      const cpuTag = p.isCPU ? '<span class="cpu-tag">IA</span>' : '';
       return `<li class="player-row ${active?'active':''}" style="--pc:${p.color}; --pc-bg:${bg}">
         <span class="row-icon">${smallShapeSVG(p.shape,p.color,22)}</span>
-        <span class="player-name">${p.name}</span>
+        <span class="player-name">${escapeHtml(p.name)}${cpuTag}</span>
         <span class="wall-count">${p.wallsLeft} <span class="wall-label">paredes</span></span>
       </li>`;
     }).join('');
@@ -605,14 +1233,16 @@
     winTitle.textContent = `¡${p.name} ganó!`;
     winTitle.style.color = p.color;
     winCard.style.setProperty('--wc', p.color);
-    winOverlay.classList.remove('hidden');
+    openOverlay('win');
   }
   function hideWinOverlay(){
-    winOverlay.classList.add('hidden');
+    closeOverlay('win');
   }
 
   // ---------- game setup ----------
-  function initGame(playersCount, size){
+  function initGame(playersCount, size, options){
+    options = options || {};
+    invalidateBotTimer();
     const mid = (size-1)/2;
     const slots = {
       top:{r:0,c:mid}, right:{r:mid,c:size-1}, bottom:{r:size-1,c:mid}, left:{r:mid,c:0}
@@ -623,15 +1253,25 @@
     else order=['top','right','bottom','left'];
 
     const wallsEach = wallsPerPlayer(size, playersCount);
-    const players = order.map((slotKey,i)=>({
-      id:i,
-      name: PALETTE[i].name,
-      color: PALETTE[i].color,
-      shape: PALETTE[i].shape,
-      r: slots[slotKey].r,
-      c: slots[slotKey].c,
-      wallsLeft: wallsEach,
-    }));
+    const names = options.names || loadPlayerNames();
+    const isCpu = !!options.isCpu;
+    const difficulty = options.difficulty || 'easy';
+
+    const players = order.map((slotKey,i)=>{
+      const skin = pieceSkins[i] || PALETTE[i];
+      const isCPU = isCpu && i===1;
+      return {
+        id: i,
+        name: isCPU ? 'CPU' : ((names[i] && names[i].trim()) ? names[i].trim() : PALETTE[i].name),
+        color: skin.color,
+        shape: skin.shape,
+        r: slots[slotKey].r,
+        c: slots[slotKey].c,
+        wallsLeft: wallsEach,
+        isCPU: isCPU,
+        difficulty: difficulty,
+      };
+    });
 
     state = {
       size,
@@ -643,6 +1283,7 @@
       walls: [],
       winner: null,
       validMoves: [],
+      isCpuGame: isCpu,
     };
     mode = 'move';
     state.validMoves = computeValidMoves(0);
@@ -711,37 +1352,163 @@
     previewEl.setAttribute('opacity','0');
   }
 
-  // ---------- menu & navigation ----------
+  // ---------- menú: modo / dificultad / nombres ----------
+  function currentMode(){
+    const r = document.querySelector('input[name="gmode"]:checked');
+    return r ? r.value : 'local';
+  }
+  function currentPlayersCount(){
+    if(currentMode()==='cpu') return 2;
+    const r = document.querySelector('input[name="players"]:checked');
+    return r ? +r.value : 2;
+  }
+  function renderNameInputs(count, isCpu){
+    const current = loadPlayerNames();
+    for(let i=0;i<4;i++){
+      const existing = document.getElementById('nameInput'+i);
+      if(existing) current[i] = existing.value;
+    }
+    let html = '';
+    for(let i=0;i<count;i++){
+      if(isCpu && i===1){
+        html += `<div><span class="cpu-name-badge">🤖 CPU</span></div>`;
+        continue;
+      }
+      const val = escapeHtml(current[i] || PALETTE[i].name);
+      html += `<input type="text" class="name-input" id="nameInput${i}" maxlength="16" value="${val}" placeholder="${escapeHtml(PALETTE[i].name)}" aria-label="Nombre del jugador ${i+1}">`;
+    }
+    namesContainer.innerHTML = html;
+  }
+  function updateMenuVisibility(){
+    const m = currentMode();
+    difficultyFieldset.classList.toggle('hidden', m!=='cpu');
+    playersFieldset.classList.toggle('hidden', m==='cpu');
+    renderNameInputs(currentPlayersCount(), m==='cpu');
+  }
+  document.getElementById('modeGroup').addEventListener('change', updateMenuVisibility);
+  document.getElementById('playersGroup').addEventListener('change', updateMenuVisibility);
+
+  // ---------- ajustes (tema + sonido) ----------
+  function openSettings(){
+    const pref = loadThemePref();
+    const radioId = pref==='light' ? 'stLight' : (pref==='dark' ? 'stDark' : 'stSystem');
+    const radio = document.getElementById(radioId);
+    if(radio) radio.checked = true;
+    updateSettingsSoundBtn();
+    openOverlay('settings');
+  }
+  settingsThemeGroup.addEventListener('change', e=>{ applyTheme(e.target.value); });
+  settingsSoundBtn.addEventListener('click', ()=>{ setMuted(!muted); updateSettingsSoundBtn(); });
+  settingsLinkBtn.addEventListener('click', openSettings);
+  settingsBtn.addEventListener('click', openSettings);
+  closeSettingsBtn.addEventListener('click', ()=> closeOverlay('settings'));
+
+  // ---------- tutorial ----------
+  closeTutorialBtn.addEventListener('click', ()=> closeOverlay('tutorial'));
+  helpLinkBtn.addEventListener('click', ()=> openOverlay('tutorial'));
+
+  // ---------- menú & navegación ----------
+  function goToMenu(){
+    invalidateBotTimer();
+    hideWinOverlay();
+    gameScreen.classList.add('hidden');
+    menuScreen.classList.remove('hidden');
+  }
+  function doRestart(){
+    if(!state) return;
+    const cfg = {
+      isCpu: !!state.isCpuGame,
+      difficulty: (state.players[1] && state.players[1].difficulty) || 'easy',
+      names: loadPlayerNames(),
+    };
+    const playersCount = state.players.length;
+    const size = state.size;
+    hideWinOverlay();
+    initGame(playersCount, size, cfg);
+  }
+
   startBtn.addEventListener('click', ()=>{
-    const playersCount = +document.querySelector('input[name="players"]:checked').value;
+    const m = currentMode();
+    const isCpu = m==='cpu';
+    const playersCount = currentPlayersCount();
     const size = +document.querySelector('input[name="size"]:checked').value;
-    initGame(playersCount, size);
+    const diffRadio = document.querySelector('input[name="difficulty"]:checked');
+    const difficulty = diffRadio ? diffRadio.value : 'easy';
+
+    const names = loadPlayerNames();
+    for(let i=0;i<playersCount;i++){
+      if(isCpu && i===1) continue;
+      const inp = document.getElementById('nameInput'+i);
+      if(inp){ names[i] = inp.value.trim(); }
+    }
+    savePlayerNames(names);
+    saveLastSetup({ playersCount, size, mode:m, difficulty });
+
+    initGame(playersCount, size, { isCpu, difficulty, names });
     menuScreen.classList.add('hidden');
     gameScreen.classList.remove('hidden');
   });
 
   restartBtn.addEventListener('click', ()=>{
     if(!state) return;
-    initGame(state.players.length, state.size);
-    hideWinOverlay();
+    if(matchInProgress()){
+      showConfirm('¿Reiniciar esta partida? Vas a perder el progreso actual.', doRestart);
+    } else {
+      doRestart();
+    }
   });
 
   menuBtn.addEventListener('click', ()=>{
-    gameScreen.classList.add('hidden');
-    menuScreen.classList.remove('hidden');
-    hideWinOverlay();
+    if(matchInProgress()){
+      showConfirm('¿Volver al menú? Vas a perder el progreso de esta partida.', goToMenu);
+    } else {
+      goToMenu();
+    }
   });
 
-  playAgainBtn.addEventListener('click', ()=>{
-    initGame(state.players.length, state.size);
-    hideWinOverlay();
-  });
+  playAgainBtn.addEventListener('click', doRestart);
+  changeConfigBtn.addEventListener('click', goToMenu);
 
-  changeConfigBtn.addEventListener('click', ()=>{
-    hideWinOverlay();
-    gameScreen.classList.add('hidden');
-    menuScreen.classList.remove('hidden');
-  });
+  // ---------- botón físico "atrás" de Android (ver MainActivity.java) ----------
+  window.QuoridorHandleBack = function(){
+    if(closeTopOverlay()) return;
+    if(!gameScreen.classList.contains('hidden') && matchInProgress()){
+      showConfirm('¿Salir al menú? Vas a perder el progreso de esta partida.', goToMenu);
+      return;
+    }
+    if(window.AndroidExitBridge && window.AndroidExitBridge.exitApp){
+      window.AndroidExitBridge.exitApp();
+    }
+  };
+
+  // ---------- arranque ----------
+  applyTheme(loadThemePref());
+  updateSettingsSoundBtn();
+
+  (function restoreLastSetup(){
+    const cfg = loadLastSetup();
+    if(!cfg) return;
+    if(cfg.mode==='cpu'){
+      const r = document.getElementById('modeCpu'); if(r) r.checked = true;
+    } else {
+      const r = document.getElementById('modeLocal'); if(r) r.checked = true;
+      if(cfg.playersCount){
+        const pr = document.getElementById('p'+cfg.playersCount); if(pr) pr.checked = true;
+      }
+    }
+    if(cfg.difficulty==='hard'){
+      const dr = document.getElementById('diffHard'); if(dr) dr.checked = true;
+    }
+    if(cfg.size){
+      const sr = document.getElementById('s'+cfg.size); if(sr) sr.checked = true;
+    }
+  })();
+
+  updateMenuVisibility();
+
+  let tutorialSeen = false;
+  try{ tutorialSeen = localStorage.getItem('quoridor_tutorial_seen')==='1'; }catch(e){}
+  if(!tutorialSeen) openOverlay('tutorial');
 
 })();
 </script>
