@@ -276,6 +276,11 @@
   }
   .turn-timer.low{ color:var(--danger); border-color:var(--danger); }
 
+  /* ---------- feedback mejorado ---------- */
+  .game-layout{ animation:gameEnter 240ms ease-out; }
+  @keyframes gameEnter{ from{opacity:.65; transform:translateY(5px)} to{opacity:1; transform:translateY(0)} }
+  .mode-btn:active,.ghost-btn:active,.primary-btn:active,.secondary-btn:active{ transform:scale(.98); }
+
   /* ---------- EDITOR DE NIVELES ---------- */
   #editorScreen{ width:100%; max-width:900px; }
   .editor-toolbar{ display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
