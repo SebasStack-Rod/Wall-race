@@ -900,89 +900,57 @@
   moveModeBtn.addEventListener('click', ()=> setMode('move'));
   wallModeBtn.addEventListener('click', ()=> setMode('wall'));
 
-  // ---------- IA (bot) ----------
-  function invalidateBotTimer(){
-    botToken++;
-    if(botTimer){ clearTimeout(botTimer); botTimer=null; }
-  }
+  // ---------- IA estratégica ----------
+  function invalidateBotTimer(){ botToken++; if(botTimer){ clearTimeout(botTimer); botTimer=null; } }
   function otherPlayerClosestToCenter(excludeIdx){
-    let best=null, bestDist=Infinity;
-    state.players.forEach((p,i)=>{
-      if(i===excludeIdx) return;
-      const d = distanceToCenter(p.r,p.c,state.blockedEdges);
-      if(d<bestDist){ bestDist=d; best=i; }
-    });
+    let best=null,bestDist=Infinity;
+    state.players.forEach((p,i)=>{ if(i===excludeIdx)return; const d=distanceToCenter(p.r,p.c,state.blockedEdges); if(d<bestDist){bestDist=d;best=i;} });
     return best;
   }
-  function findBestBlockingWall(opponentIdx, currentOppDist){
-    const opp = state.players[opponentIdx];
-    const radius = 2;
-    const minSlot = 0, maxSlot = state.size-2;
-    let candidates = [];
-    for(let r=Math.max(minSlot,opp.r-radius); r<=Math.min(maxSlot,opp.r+radius); r++){
-      for(let c=Math.max(minSlot,opp.c-radius); c<=Math.min(maxSlot,opp.c+radius); c++){
-        for(const orientation of ['h','v']){
-          const evalRes = evaluateWallForMode(r,c,orientation);
-          if(!evalRes.valid) continue;
-          const testSet = new Set(state.blockedEdges);
-          evalRes.edges.forEach(e=> testSet.add(edgeKey(e[0],e[1],e[2],e[3])));
-          const newOppDist = distanceToCenter(opp.r,opp.c,testSet);
-          if(newOppDist > currentOppDist){
-            candidates.push({ r, c, orientation, gain: newOppDist - currentOppDist });
-          }
-        }
-      }
+  function findBestBlockingWall(opponentIdx,currentOppDist){
+    const opp=state.players[opponentIdx], radius=3, maxSlot=state.size-2, candidates=[];
+    for(let r=Math.max(0,opp.r-radius);r<=Math.min(maxSlot,opp.r+radius);r++) for(let c=Math.max(0,opp.c-radius);c<=Math.min(maxSlot,opp.c+radius);c++) for(const orientation of ['h','v']){
+      const ev=evaluateWallForMode(r,c,orientation); if(!ev.valid) continue;
+      const test=new Set(state.blockedEdges); ev.edges.forEach(e=>test.add(edgeKey(e[0],e[1],e[2],e[3])));
+      if(ev.mirrorEdges) ev.mirrorEdges.forEach(e=>test.add(edgeKey(e[0],e[1],e[2],e[3])));
+      const d=distanceToCenter(opp.r,opp.c,test); if(d>currentOppDist) candidates.push({r,c,orientation,gain:d-currentOppDist,newOppDist:d});
     }
-    if(!candidates.length) return null;
-    candidates.sort((a,b)=> b.gain - a.gain);
-    const topGain = candidates[0].gain;
-    const bestOnes = candidates.filter(cd=> cd.gain===topGain);
-    return bestOnes[Math.floor(Math.random()*bestOnes.length)];
+    if(!candidates.length)return null;
+    candidates.sort((a,b)=>b.gain-a.gain||a.newOppDist-b.newOppDist);
+    const gain=candidates[0].gain, top=candidates.filter(x=>x.gain===gain);
+    return top[Math.floor(Math.random()*top.length)];
+  }
+  function scoreBotMove(botIdx,m,personality){
+    const bot=state.players[botIdx], myAfter=distanceToCenter(m.r,m.c,state.blockedEdges);
+    let score=-myAfter*10, oppIdx=otherPlayerClosestToCenter(botIdx);
+    if(oppIdx!=null){ const oppDist=distanceToCenter(state.players[oppIdx].r,state.players[oppIdx].c,state.blockedEdges);
+      if(personality==='aggressive')score+=(oppDist-myAfter)*1.8;
+      if(personality==='defensive')score+=oppDist*0.25;
+      if(personality==='speed'&&myAfter===0)score+=1000;
+      if(personality==='strategist')score+=(oppDist-myAfter)*0.9;
+    }
+    if(personality==='defensive')score+=distanceToCenter(bot.r,bot.c,state.blockedEdges)-myAfter;
+    return score;
   }
   function botPlanMove(idx){
-    const bot = state.players[idx];
-    const difficulty = bot.difficulty || 'easy';
-    if(bot.wallsLeft > 0){
-      const opponentIdx = otherPlayerClosestToCenter(idx);
-      if(opponentIdx!=null){
-        const myDist = distanceToCenter(bot.r, bot.c, state.blockedEdges);
-        const oppDist = distanceToCenter(state.players[opponentIdx].r, state.players[opponentIdx].c, state.blockedEdges);
-        const wallChance = difficulty==='hard' ? 0.72 : 0.28;
-        if(oppDist <= myDist && Math.random() < wallChance){
-          const wallMove = findBestBlockingWall(opponentIdx, oppDist);
-          if(wallMove) return { type:'wall', r:wallMove.r, c:wallMove.c, orientation:wallMove.orientation };
-        }
-      }
+    const bot=state.players[idx], difficulty=bot.difficulty||'easy';
+    const profiles={easy:{wallChance:.12,randomness:.55,personality:'speed'},normal:{wallChance:.32,randomness:.28,personality:'speed'},hard:{wallChance:.58,randomness:.12,personality:'aggressive'},expert:{wallChance:.82,randomness:.04,personality:'strategist'}};
+    const profile=profiles[difficulty]||profiles.easy, oppIdx=otherPlayerClosestToCenter(idx);
+    if(bot.wallsLeft>0&&oppIdx!=null){
+      const myDist=distanceToCenter(bot.r,bot.c,state.blockedEdges),oppDist=distanceToCenter(state.players[oppIdx].r,state.players[oppIdx].c,state.blockedEdges);
+      if(oppDist<=myDist+1&&Math.random()<profile.wallChance){ const w=findBestBlockingWall(oppIdx,oppDist); if(w)return {type:'wall',r:w.r,c:w.c,orientation:w.orientation}; }
     }
-    const validMoves = state.validMoves;
-    if(!validMoves.length) return { type:'move', r:bot.r, c:bot.c };
-    const scored = validMoves.map(m=> ({ m, d: distanceToCenter(m.r, m.c, state.blockedEdges) }));
-    scored.sort((a,b)=> a.d-b.d);
-    const randomness = difficulty==='hard' ? 0.1 : 0.3;
-    let choice;
-    if(scored.length>1 && Math.random()<randomness){
-      choice = scored[Math.floor(Math.random()*scored.length)];
-    } else {
-      choice = scored[0];
-    }
-    return { type:'move', r:choice.m.r, c:choice.m.c };
+    const moves=state.validMoves; if(!moves.length)return {type:'move',r:bot.r,c:bot.c};
+    const scored=moves.map(m=>({m,score:scoreBotMove(idx,m,profile.personality)})).sort((a,b)=>b.score-a.score);
+    const choice=Math.random()<profile.randomness?scored[Math.floor(Math.random()*Math.min(3,scored.length))]:scored[0];
+    return {type:'move',r:choice.m.r,c:choice.m.c};
   }
   function scheduleBotTurnIfNeeded(){
-    if(!state || state.winner) return;
-    const cp = state.players[state.currentPlayerIndex];
-    if(!cp || !cp.isCPU) return;
-    const myToken = ++botToken;
-    hintLine.textContent = 'La IA está pensando…';
-    hintLine.classList.add('thinking');
-    botTimer = setTimeout(()=>{
-      if(myToken!==botToken) return;
-      if(!state || state.winner) return;
-      const cpNow = state.players[state.currentPlayerIndex];
-      if(!cpNow || !cpNow.isCPU) return;
-      const decision = botPlanMove(state.currentPlayerIndex);
-      if(decision.type==='move') performMove(decision.r, decision.c);
-      else commitWall(decision.r, decision.c, decision.orientation);
-    }, 550 + Math.random()*450);
+    if(!state||state.winner)return; const cp=state.players[state.currentPlayerIndex]; if(!cp||!cp.isCPU)return;
+    const token=++botToken; hintLine.textContent='La IA está analizando el tablero…'; hintLine.classList.add('thinking');
+    botTimer=setTimeout(()=>{ if(token!==botToken||!state||state.winner)return; const now=state.players[state.currentPlayerIndex]; if(!now||!now.isCPU)return;
+      const d=botPlanMove(state.currentPlayerIndex); if(d.type==='move')performMove(d.r,d.c); else commitWall(d.r,d.c,d.orientation);
+    },700+Math.random()*700);
   }
 
   function teamOf(playerId){
