@@ -30,6 +30,65 @@
   const HILL_TARGET = 3;
   const HUNTER_TURNS_PER_SIZE = 3;
   const PARTY_TYPES = ['pared_extra','turno_extra','aturdido'];
+  // ---------- FASE 2: campaña, rivales, XP y progresión ----------
+  const CAMPAIGN_LEVELS = [
+    { id:1, name:'Primer duelo', rival:'Toto', personality:'speed', difficulty:'easy', size:5, xp:100, intro:'Toto todavía está aprendiendo. Aprovechá sus movimientos directos.' },
+    { id:2, name:'El desafío de Mora', rival:'Mora', personality:'defensive', difficulty:'easy', size:7, xp:125, intro:'Mora prefiere cerrar caminos antes que correr al centro.' },
+    { id:3, name:'Rulo contraataca', rival:'Rulo', personality:'aggressive', difficulty:'normal', size:7, xp:150, intro:'Rulo empieza a usar las paredes para frenarte.' },
+    { id:4, name:'La estratega Nina', rival:'Nina', personality:'strategist', difficulty:'normal', size:9, xp:175, intro:'Nina calcula mejor sus bloqueos y busca el camino más corto.' },
+    { id:5, name:'Bruno no cede', rival:'Bruno', personality:'defensive', difficulty:'normal', size:9, xp:200, intro:'Bruno conserva paredes y espera el momento justo.' },
+    { id:6, name:'Vega acelera', rival:'Vega', personality:'speed', difficulty:'hard', size:9, xp:225, intro:'Vega prioriza avanzar y te obliga a reaccionar rápido.' },
+    { id:7, name:'Sombra', rival:'Sombra', personality:'aggressive', difficulty:'hard', size:11, xp:250, intro:'Sombra empieza a presionar con bloqueos cerca de tu ruta.' },
+    { id:8, name:'Atlas', rival:'Atlas', personality:'strategist', difficulty:'hard', size:11, xp:275, intro:'Atlas analiza el tablero completo antes de decidir.' },
+    { id:9, name:'Lince', rival:'Lince', personality:'speed', difficulty:'expert', size:9, xp:300, intro:'Lince combina velocidad con bloqueos oportunistas.' },
+    { id:10, name:'El maestro', rival:'Maestro', personality:'strategist', difficulty:'expert', size:11, xp:400, intro:'El último rival domina todas las herramientas del tablero.' },
+  ];
+  const CAMPAIGN_RANKS = [
+    { name:'Novato', min:0 }, { name:'Aprendiz', min:150 }, { name:'Táctico', min:400 },
+    { name:'Estratega', min:750 }, { name:'Maestro', min:1200 }, { name:'Leyenda', min:1800 }
+  ];
+  const CAMPAIGN_SKIN_UNLOCKS = { 4:{color:'#8e5fb0'}, 6:{color:'#2f9e97'}, 8:{color:'#c25b9c'}, 10:{color:'#6b7280'} };
+  const CAMPAIGN_SHAPE_UNLOCKS = { 3:'star', 5:'hex', 7:'diamond', 9:'triangle' };
+  function blankCampaign(){ return { xp:0, unlockedLevel:1, completed:[], wins:0, losses:0 }; }
+  function loadCampaign(){
+    const base=blankCampaign();
+    try{
+      const raw=localStorage.getItem('quoridor_campaign');
+      if(raw){ const d=JSON.parse(raw)||{}; base.xp=+d.xp||0; base.unlockedLevel=Math.max(1,Math.min(CAMPAIGN_LEVELS.length,+d.unlockedLevel||1)); base.completed=Array.isArray(d.completed)?d.completed:[]; base.wins=+d.wins||0; base.losses=+d.losses||0; }
+    }catch(e){}
+    return base;
+  }
+  let campaignData=loadCampaign();
+  function saveCampaign(){ try{ localStorage.setItem('quoridor_campaign',JSON.stringify(campaignData)); }catch(e){} }
+  function campaignRank(){ let rank=CAMPAIGN_RANKS[0]; for(const r of CAMPAIGN_RANKS){ if(campaignData.xp>=r.min) rank=r; } return rank; }
+  function campaignNextRank(){ for(const r of CAMPAIGN_RANKS){ if(campaignData.xp<r.min) return r; } return null; }
+  function campaignLevelUnlocked(n){ return n<=campaignData.unlockedLevel; }
+  function campaignSkinColorUnlocked(color){
+    for(const [lvl,c] of Object.entries(CAMPAIGN_SKIN_UNLOCKS)){ if(c===color && campaignData.completed.includes(+lvl)) return true; }
+    return !Object.values(CAMPAIGN_SKIN_UNLOCKS).includes(color);
+  }
+  function campaignShapeUnlocked(shape){
+    for(const [lvl,sh] of Object.entries(CAMPAIGN_SHAPE_UNLOCKS)){ if(sh===shape && campaignData.completed.includes(+lvl)) return true; }
+    return !Object.values(CAMPAIGN_SHAPE_UNLOCKS).includes(shape);
+  }
+  function awardCampaignXP(level, won){
+    if(!state || !state.campaign) return 0;
+    const lvl=CAMPAIGN_LEVELS.find(x=>x.id===level);
+    if(!lvl) return 0;
+    if(won){
+      const first=campaignData.completed.indexOf(level)===-1;
+      if(first){ campaignData.completed.push(level); campaignData.xp+=lvl.xp; }
+      campaignData.wins+=1;
+      if(level>=campaignData.unlockedLevel) campaignData.unlockedLevel=Math.min(CAMPAIGN_LEVELS.length,level+1);
+      saveCampaign();
+      return first ? lvl.xp : 0;
+    }
+    campaignData.losses+=1; saveCampaign(); return 0;
+  }
+  function campaignProgressText(){
+    const rank=campaignRank(), next=campaignNextRank();
+    return `${rank.name} · ${campaignData.xp} XP${next?` · ${next.min-campaignData.xp} XP para ${next.name}`:' · rango máximo'}`;
+  }
   // Plantillas de paredes para el modo Laberinto: cada una es una lista de segmentos
   // relativos a un punto de anclaje (dr,dc,orientation). Se prueban una por una y si
   // alguna rompe el camino de algún jugador, se descarta la plantilla completa.
@@ -814,12 +873,12 @@
     const current = pieceSkins[activeSkinSlot];
     const previewHtml = smallShapeSVG(current.shape, current.color, 64);
     const colorsHtml = SKIN_COLORS.map(c=>{
-      const sel = c===current.color ? 'selected' : '';
-      return `<button type="button" class="color-swatch ${sel}" data-color="${c}" style="background:${c}" aria-label="Color ${c}"></button>`;
+      const sel = c===current.color ? 'selected' : ''; const locked=!campaignSkinColorUnlocked(c);
+      return `<button type="button" class="color-swatch ${sel} ${locked?'locked-swatch':''}" data-color="${c}" ${locked?'disabled':''} style="background:${c}" aria-label="${locked?'Bloqueado':'Color '+c}">${locked?'🔒':''}</button>`;
     }).join('');
     const shapesHtml = SKIN_SHAPES.map(sh=>{
-      const sel = sh===current.shape ? 'selected' : '';
-      return `<button type="button" class="shape-swatch ${sel}" data-shape="${sh}" aria-label="${SHAPE_LABEL[sh]}">${smallShapeSVG(sh,'var(--ink)',22)}</button>`;
+      const sel = sh===current.shape ? 'selected' : ''; const locked=!campaignShapeUnlocked(sh);
+      return `<button type="button" class="shape-swatch ${sel} ${locked?'locked-swatch':''}" data-shape="${sh}" ${locked?'disabled':''} aria-label="${locked?'Bloqueado':SHAPE_LABEL[sh]}">${locked?'🔒':smallShapeSVG(sh,'var(--ink)',22)}</button>`;
     }).join('');
     skinsBody.innerHTML = `
       <div class="slot-tabs">${tabsHtml}</div>
@@ -831,6 +890,7 @@
     `;
   }
   function setSkinColor(slot, color){
+    if(!campaignSkinColorUnlocked(color)){ showAchievementToasts([{icon:'🔒',name:'Color bloqueado',desc:'Completá la etapa correspondiente de la campaña.'}]); return; }
     const currentColorOfSlot = pieceSkins[slot].color;
     const otherIdx = pieceSkins.findIndex((s,i)=> i!==slot && s.color===color);
     pieceSkins[slot].color = color;
@@ -847,7 +907,7 @@
     const colorBtn = e.target.closest('.color-swatch');
     if(colorBtn){ setSkinColor(activeSkinSlot, colorBtn.dataset.color); return; }
     const shapeBtn = e.target.closest('.shape-swatch');
-    if(shapeBtn){ pieceSkins[activeSkinSlot].shape = shapeBtn.dataset.shape; saveSkins(); recordSkinCustomized(); renderSkinsOverlay(); return; }
+    if(shapeBtn){ if(!campaignShapeUnlocked(shapeBtn.dataset.shape)){ showAchievementToasts([{icon:'🔒',name:'Forma bloqueada',desc:'Avanzá en la campaña para desbloquearla.'}]); return; } pieceSkins[activeSkinSlot].shape = shapeBtn.dataset.shape; saveSkins(); recordSkinCustomized(); renderSkinsOverlay(); return; }
   });
   resetSkinsBtn.addEventListener('click', ()=>{
     pieceSkins = defaultSkins();
@@ -856,6 +916,49 @@
   });
   skinsLinkBtn.addEventListener('click', ()=>{ renderSkinsOverlay(); openOverlay('skins'); });
   closeSkinsBtn.addEventListener('click', ()=> closeOverlay('skins'));
+
+
+  // ---------- campaña: interfaz y selección de niveles ----------
+  const campaignBtn=document.createElement('button');
+  campaignBtn.type='button'; campaignBtn.className='text-link'; campaignBtn.id='campaignLinkBtn'; campaignBtn.textContent='🏕️ Modo campaña';
+  const menuLinks=document.querySelector('.menu-links'); if(menuLinks) menuLinks.insertBefore(campaignBtn, menuLinks.firstChild);
+  const campaignOverlay=document.createElement('div');
+  campaignOverlay.id='campaignOverlay'; campaignOverlay.className='overlay-backdrop hidden';
+  campaignOverlay.innerHTML=`<div class="modal-card wide campaign-card">
+    <h2>🏕️ Campaña</h2><p id="campaignRankLine" class="campaign-rank-line"></p>
+    <div class="campaign-progress"><div id="campaignProgressFill"></div></div>
+    <p id="campaignNextLine" class="campaign-next-line"></p><div id="campaignLevels" class="campaign-levels"></div>
+    <div class="modal-actions"><button class="secondary-btn" id="closeCampaignBtn">Volver</button></div>
+  </div>`;
+  document.body.appendChild(campaignOverlay); overlayEls.campaign=campaignOverlay;
+  const campaignLevelsEl=campaignOverlay.querySelector('#campaignLevels'), campaignRankLine=campaignOverlay.querySelector('#campaignRankLine');
+  const campaignNextLine=campaignOverlay.querySelector('#campaignNextLine'), campaignProgressFill=campaignOverlay.querySelector('#campaignProgressFill');
+  function renderCampaign(){
+    const rank=campaignRank(), next=campaignNextRank();
+    campaignRankLine.textContent=`${rank.name} · ${campaignData.xp} XP · ${campaignData.wins} victorias`;
+    const prev=rank.min, max=next?next.min:Math.max(rank.min+1,campaignData.xp);
+    campaignProgressFill.style.width=(next?Math.max(0,Math.min(100,((campaignData.xp-prev)/(max-prev))*100):100)+'%';
+    campaignNextLine.textContent=next?`${next.min-campaignData.xp} XP para rango ${next.name}`:'Rango máximo alcanzado';
+    campaignLevelsEl.innerHTML=CAMPAIGN_LEVELS.map(l=>{
+      const unlocked=campaignLevelUnlocked(l.id), done=campaignData.completed.includes(l.id), locked=!unlocked;
+      return `<button type="button" class="campaign-level ${done?'done':''} ${locked?'locked':''}" data-level="${l.id}" ${locked?'disabled':''}>
+        <span class="campaign-level-num">${done?'✓':l.id}</span><span class="campaign-level-main"><strong>${escapeHtml(l.name)}</strong><small>vs. ${escapeHtml(l.rival)} · ${l.size}×${l.size}</small></span><span class="campaign-level-xp">+${l.xp} XP</span>
+      </button>`;
+    }).join('');
+  }
+  campaignBtn.addEventListener('click',()=>{ renderCampaign(); openOverlay('campaign'); });
+  campaignOverlay.querySelector('#closeCampaignBtn').addEventListener('click',()=>closeOverlay('campaign'));
+  campaignLevelsEl.addEventListener('click',e=>{
+    const btn=e.target.closest('.campaign-level'); if(!btn || btn.disabled) return;
+    const level=CAMPAIGN_LEVELS.find(x=>x.id===+btn.dataset.level); if(!level) return;
+    closeOverlay('campaign'); startCampaignLevel(level);
+  });
+  function startCampaignLevel(level){
+    const names=['Jugador 1',level.rival]; savePlayerNames(names);
+    initGame(2,level.size,{isCpu:true,difficulty:level.difficulty,names,ruleset:'classic',campaign:true,campaignLevel:level.id,campaignRival:level.rival,campaignPersonality:level.personality});
+    menuScreen.classList.add('hidden'); gameScreen.classList.remove('hidden');
+    setTimeout(()=>{ hintLine.textContent=`${level.rival}: ${level.intro}`; },0);
+  }
 
   // ---------- último setup usado ----------
   function loadLastSetup(){
@@ -1322,7 +1425,12 @@
       winTitle.style.color = p.color;
       winCard.style.setProperty('--wc', p.color);
       const msgEl = winCard.querySelector('p');
-      if(msgEl) msgEl.textContent = team ? `${p.name} llegó primero al centro para su equipo.` : 'Podés jugar otra ronda con la misma configuración o cambiar los ajustes.';
+      if(state.campaign){
+        if(p.id===0) msgEl.textContent = `¡Ganaste la etapa ${state.campaignLevel}! +${state.campaignXPReward||0} XP. ${campaignProgressText()}`;
+        else msgEl.textContent = `${p.name} ganó esta etapa. Podés intentarlo de nuevo cuando quieras.`;
+      } else {
+        if(msgEl) msgEl.textContent = team ? `${p.name} llegó primero al centro para su equipo.` : 'Podés jugar otra ronda con la misma configuración o cambiar los ajustes.';
+      }
     }
     openOverlay('win');
   }
@@ -1394,6 +1502,10 @@
       dailyPar: null,
       hunterTurnLimit: ruleset==='hunter' ? size*HUNTER_TURNS_PER_SIZE : null,
       resultTag: null,
+      campaign: !!options.campaign,
+      campaignLevel: options.campaignLevel || null,
+      campaignRival: options.campaignRival || null,
+      campaignPersonality: options.campaignPersonality || null,
     };
     mode = 'move';
 
@@ -1912,8 +2024,9 @@
         const pr = document.getElementById('p'+cfg.playersCount); if(pr) pr.checked = true;
       }
     }
-    if(cfg.difficulty==='hard'){
-      const dr = document.getElementById('diffHard'); if(dr) dr.checked = true;
+    if(cfg.difficulty){
+      const dr = document.getElementById('diff'+cfg.difficulty.charAt(0).toUpperCase()+cfg.difficulty.slice(1));
+      if(dr) dr.checked = true;
     }
     if(cfg.size){
       const sr = document.getElementById('s'+cfg.size); if(sr) sr.checked = true;
