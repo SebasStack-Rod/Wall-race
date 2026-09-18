@@ -300,3 +300,23 @@
   .power-token{ pointer-events:none; }
   @keyframes powerSpin{ 0%{ transform:rotate(0deg) scale(1); } 50%{ transform:rotate(180deg) scale(1.15); } 100%{ transform:rotate(360deg) scale(1); } }
   .power-token .spin{ transform-box:fill-box; transform-origin:center; animation:powerSpin 2.4s linear infinite; }
+
+
+/* ---------- FASE 2: CAMPAÑA Y PROGRESIÓN ---------- */
+.campaign-card{ max-width:560px; }
+.campaign-rank-line{ text-align:center; font-weight:700; margin-bottom:10px !important; }
+.campaign-next-line{ text-align:center; font-size:.78rem !important; margin:7px 0 14px !important; }
+.campaign-progress{ height:10px; border-radius:999px; background:var(--panel-2); border:1px solid var(--line); overflow:hidden; }
+.campaign-progress > div{ height:100%; width:0; border-radius:inherit; background:var(--accent); transition:width 220ms ease; }
+.campaign-levels{ display:flex; flex-direction:column; gap:8px; max-height:52vh; overflow-y:auto; }
+.campaign-level{ display:flex; align-items:center; gap:10px; width:100%; text-align:left; padding:11px 12px; border-radius:13px; border:1px solid var(--line); background:var(--panel-2); color:var(--ink); cursor:pointer; }
+.campaign-level:hover:not(:disabled){ border-color:var(--accent); transform:translateY(-1px); }
+.campaign-level.done{ border-color:var(--accent); }
+.campaign-level.locked{ opacity:.48; cursor:not-allowed; }
+.campaign-level-num{ width:30px; height:30px; display:flex; align-items:center; justify-content:center; border-radius:50%; background:var(--panel); border:1px solid var(--line); font-weight:800; flex:0 0 auto; }
+.campaign-level.done .campaign-level-num{ background:var(--accent); color:var(--accent-ink); border-color:var(--accent); }
+.campaign-level-main{ flex:1; min-width:0; display:flex; flex-direction:column; gap:2px; }
+.campaign-level-main strong{ font-size:.88rem; }
+.campaign-level-main small{ color:var(--ink-soft); font-size:.75rem; }
+.campaign-level-xp{ font-weight:800; font-size:.78rem; white-space:nowrap; }
+.locked-swatch{ opacity:.45; cursor:not-allowed !important; }
