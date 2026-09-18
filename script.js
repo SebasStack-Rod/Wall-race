@@ -22,9 +22,13 @@
     maze:    { label:'Laberinto', hint:'El tablero arranca con paredes al azar ya colocadas (o con tu propio diseño del editor de niveles), garantizando que siempre haya camino.' },
     blitz:   { label:'Contrarreloj', hint:'Cada turno tiene 20 segundos. Si se acaba el tiempo, se juega un movimiento al azar y pasa el turno.' },
     mirror:  { label:'Espejo', hint:'Sólo para 2 jugadores. Cada pared que colocás aparece también reflejada en el punto opuesto del tablero.', forcePlayers:2 },
+    hill:    { label:'Rey de la colina', hint:'No alcanza con pisar el centro una vez: hay que acumular varios turnos parado en la zona central (no hace falta que sean seguidos).' },
+    hunter:  { label:'Cazador y fugitivo', hint:'El Jugador 1 es el fugitivo y gana si llega al centro. El resto son cazadores: no ganan llegando al centro, sólo bloqueando con paredes antes de que se acabe el límite de turnos.' },
   };
   const FOG_RADIUS = 2;
   const BLITZ_SECONDS = 20;
+  const HILL_TARGET = 3;
+  const HUNTER_TURNS_PER_SIZE = 3;
   const PARTY_TYPES = ['pared_extra','turno_extra','aturdido'];
   // Plantillas de paredes para el modo Laberinto: cada una es una lista de segmentos
   // relativos a un punto de anclaje (dr,dc,orientation). Se prueban una por una y si
@@ -64,7 +68,9 @@
     { id:'modo_laberinto', icon:'🧊', name:'Sin perderse', desc:'Ganá una partida en modo Laberinto.', check:s=> s.modeWins && s.modeWins.maze>=1 },
     { id:'modo_blitz', icon:'⏱️', name:'Contra las cuerdas', desc:'Ganá una partida en modo Contrarreloj.', check:s=> s.modeWins && s.modeWins.blitz>=1 },
     { id:'modo_espejo', icon:'🪞', name:'Simetría perfecta', desc:'Ganá una partida en modo Espejo.', check:s=> s.modeWins && s.modeWins.mirror>=1 },
-    { id:'todos_los_modos', icon:'🌈', name:'Probaste de todo', desc:'Jugá al menos una vez en los 6 modos especiales.', check:s=> s.modesPlayed && Object.keys(RULESETS).filter(k=>k!=='classic').every(k=> (s.modesPlayed[k]||0)>=1) },
+    { id:'modo_colina', icon:'⛰️', name:'Rey de la colina', desc:'Ganá una partida en modo Rey de la colina.', check:s=> s.modeWins && s.modeWins.hill>=1 },
+    { id:'modo_cazador', icon:'🏹', name:'Cacería exitosa', desc:'Ganá una partida en modo Cazador y fugitivo, como fugitivo o como cazador.', check:s=> s.modeWins && s.modeWins.hunter>=1 },
+    { id:'todos_los_modos', icon:'🌈', name:'Probaste de todo', desc:'Jugá al menos una vez en todos los modos especiales.', check:s=> s.modesPlayed && Object.keys(RULESETS).filter(k=>k!=='classic').every(k=> (s.modesPlayed[k]||0)>=1) },
     { id:'desafio_1', icon:'📌', name:'Reto del día', desc:'Resolvé el desafío diario.', check:s=> s.daily && s.daily.completedCount>=1 },
     { id:'desafio_racha_7', icon:'📆', name:'Semana completa', desc:'Completá el desafío diario 7 días seguidos.', check:s=> s.daily && s.daily.bestStreak>=7 },
     { id:'personalizar_ficha', icon:'🎨', name:'Estilo propio', desc:'Cambiá el color o la forma de una ficha.', check:s=> !!s.skinsCustomized },
@@ -318,6 +324,33 @@
     return { valid:true, edges:base.edges, mirrorEdges:mEdges };
   }
 
+  // ---------- Modo Rey de la colina: zona central en forma de cruz ----------
+  function hillCells(){
+    const { r, c } = state.center;
+    return [ {r,c}, {r:r-1,c}, {r:r+1,c}, {r,c:c-1}, {r,c:c+1} ].filter(cell=>
+      cell.r>=0 && cell.c>=0 && cell.r<state.size && cell.c<state.size
+    );
+  }
+  function isHillCell(r,c){ return hillCells().some(cell=> cell.r===r && cell.c===c); }
+
+  // ---------- Condición de victoria (varía según el modo de partida) ----------
+  function checkWinAfterMove(p){
+    if(state.ruleset==='hill'){
+      if(isHillCell(p.r,p.c)) p.hillTurns = (p.hillTurns||0) + 1;
+      return p.hillTurns >= HILL_TARGET;
+    }
+    if(state.ruleset==='hunter'){
+      return p.id===0 && p.r===state.center.r && p.c===state.center.c;
+    }
+    return p.r===state.center.r && p.c===state.center.c;
+  }
+  function checkHunterTimeout(){
+    if(!state || state.ruleset!=='hunter' || state.winner) return;
+    if((state.moveCount||0) >= state.hunterTurnLimit){
+      finishGame(state.players[1], 'huntersWin');
+    }
+  }
+
   // ---------- Generador de paredes al azar (modo Laberinto y Desafío diario) ----------
   // localState: objeto con {size, occupied, blockedEdges, walls, players} — puede ser
   // el state real de una partida (ya con jugadores) o uno temporal sólo para generar.
@@ -552,8 +585,8 @@
     return {
       totalGames:0, winsBySlot:[0,0,0,0], streak:{slot:null,count:0}, vsCpu:{played:0,won:0},
       vsCpuHardWon:0, winsWith4:0,
-      modesPlayed:{ fog:0, teams:0, party:0, maze:0, blitz:0, mirror:0 },
-      modeWins:{ fog:0, teams:0, party:0, maze:0, blitz:0, mirror:0 },
+      modesPlayed:{ fog:0, teams:0, party:0, maze:0, blitz:0, mirror:0, hill:0, hunter:0 },
+      modeWins:{ fog:0, teams:0, party:0, maze:0, blitz:0, mirror:0, hill:0, hunter:0 },
       sizeWins:{5:0,7:0,9:0,11:0},
       noWallWins:0, allWallsUsedWins:0,
       fastestWinMoves:null, longestGameMoves:0, totalWallsPlaced:0,
@@ -1022,7 +1055,7 @@
     p.r = r; p.c = c;
     state.moveCount = (state.moveCount||0) + 1;
     maybePickUpPower(p);
-    if(r===state.center.r && c===state.center.c){
+    if(checkWinAfterMove(p)){
       render(idx);
       finishGame(p);
       return;
@@ -1037,6 +1070,7 @@
     }
     advanceTurn();
     maybeSpawnPower();
+    checkHunterTimeout();
     render(idx);
   }
 
@@ -1060,6 +1094,7 @@
     vibrate(18);
     advanceTurn();
     maybeSpawnPower();
+    checkHunterTimeout();
     render();
   }
 
@@ -1182,6 +1217,11 @@
       gridHTML += `<line x1="${i*cs}" y1="0" x2="${i*cs}" y2="${BOARD_PX}" stroke="var(--line)" stroke-width="1"/>`;
       gridHTML += `<line x1="0" y1="${i*cs}" x2="${BOARD_PX}" y2="${i*cs}" stroke="var(--line)" stroke-width="1"/>`;
     }
+    if(state.ruleset==='hill'){
+      hillCells().forEach(cell=>{
+        gridHTML += `<rect x="${cell.c*cs}" y="${cell.r*cs}" width="${cs}" height="${cs}" fill="var(--accent)" opacity="0.14"/>`;
+      });
+    }
     const ccx=(state.center.c+0.5)*cs, ccy=(state.center.r+0.5)*cs;
     gridHTML += `<circle cx="${ccx}" cy="${ccy}" r="15" fill="none" stroke="var(--accent)" stroke-width="3" class="center-glow"/>`;
     gridEl.innerHTML = gridHTML;
@@ -1232,6 +1272,17 @@
     updateModeUI();
     scheduleBotTurnIfNeeded();
     startTurnTimer();
+    updateHunterBadge();
+  }
+  function updateHunterBadge(){
+    if(!state || state.ruleset!=='hunter' || state.winner){
+      if(!state || state.ruleset!=='blitz') turnTimerBadge.classList.add('hidden');
+      return;
+    }
+    const remaining = Math.max(0, state.hunterTurnLimit - (state.moveCount||0));
+    turnTimerBadge.classList.remove('hidden');
+    turnTimerBadge.classList.toggle('low', remaining<=5);
+    turnTimerBadge.textContent = `🏃 ${remaining} turno${remaining===1?'':'s'}`;
   }
 
   function updateHeader(){
@@ -1260,6 +1311,8 @@
       const team = teamOf(p.id);
       const teamTag = team ? `<span class="cpu-tag">Equipo ${team}</span>` : '';
       const stunTag = p.stunned ? '<span class="cpu-tag">😵 aturdido</span>' : '';
+      const hillTag = (state.ruleset==='hill') ? `<span class="cpu-tag">⛰️ ${p.hillTurns||0}/${HILL_TARGET}</span>` : '';
+      const hunterTag = (state.ruleset==='hunter') ? (p.id===0 ? '<span class="cpu-tag">🏃 fugitivo</span>' : '<span class="cpu-tag">🏹 cazador</span>') : '';
       return `<li class="player-row ${active?'active':''}" style="--pc:${p.color}; --pc-bg:${bg}">
         <span class="row-icon">${smallShapeSVG(p.shape,p.color,22)}</span>
         <span class="player-name">${escapeHtml(p.name)}${cpuTag}${teamTag}${stunTag}</span>
@@ -1270,7 +1323,13 @@
 
   // ---------- win overlay ----------
   function showWinOverlay(p, team){
-    if(state.isDaily){
+    if(state.resultTag==='huntersWin'){
+      winTitle.textContent = '¡Atraparon al fugitivo!';
+      winTitle.style.color = state.winner.color;
+      winCard.style.setProperty('--wc', state.winner.color);
+      const msgEl = winCard.querySelector('p');
+      if(msgEl) msgEl.textContent = 'Los cazadores se las arreglaron con las paredes para acorralarlo antes de que se acabaran los turnos.';
+    } else if(state.isDaily){
       const par = state.dailyPar;
       const used = state.moveCount;
       winTitle.textContent = '¡Desafío diario resuelto!';
@@ -1278,6 +1337,18 @@
       winCard.style.setProperty('--wc', p.color);
       const msgEl = winCard.querySelector('p');
       if(msgEl) msgEl.textContent = `Lo resolviste en ${used} movimiento${used===1?'':'s'} (par: ${par}). ${used<=par ? '¡Igualaste o mejoraste el par!' : 'Volvé mañana por un nuevo tablero.'}`;
+    } else if(state.ruleset==='hunter'){
+      winTitle.textContent = `¡${p.name} escapó!`;
+      winTitle.style.color = p.color;
+      winCard.style.setProperty('--wc', p.color);
+      const msgEl = winCard.querySelector('p');
+      if(msgEl) msgEl.textContent = 'El fugitivo llegó al centro antes de que lo atraparan.';
+    } else if(state.ruleset==='hill'){
+      winTitle.textContent = `¡${p.name} ganó!`;
+      winTitle.style.color = p.color;
+      winCard.style.setProperty('--wc', p.color);
+      const msgEl = winCard.querySelector('p');
+      if(msgEl) msgEl.textContent = `Acumuló ${HILL_TARGET} turnos en la zona central. ¡Rey de la colina!`;
     } else {
       winTitle.textContent = team ? `¡Equipo ${team} ganó!` : `¡${p.name} ganó!`;
       winTitle.style.color = p.color;
@@ -1316,6 +1387,10 @@
     const players = order.map((slotKey,i)=>{
       const skin = pieceSkins[i] || PALETTE[i];
       const isCPU = isCpu && i===1;
+      let walls = wallsEach;
+      if(ruleset==='hunter' && !isDaily){
+        walls = (i===0) ? Math.max(1, Math.floor(wallsEach/2)) : (wallsEach + 2);
+      }
       return {
         id: i,
         name: isCPU ? 'CPU' : ((names[i] && names[i].trim()) ? names[i].trim() : PALETTE[i].name),
@@ -1323,11 +1398,12 @@
         shape: skin.shape,
         r: slots[slotKey].r,
         c: slots[slotKey].c,
-        wallsLeft: wallsEach,
-        wallsStart: wallsEach,
+        wallsLeft: walls,
+        wallsStart: walls,
         isCPU: isCPU,
         difficulty: difficulty,
         stunned: false,
+        hillTurns: 0,
       };
     });
 
@@ -1348,6 +1424,8 @@
       skipAdvance: false,
       isDaily,
       dailyPar: null,
+      hunterTurnLimit: ruleset==='hunter' ? size*HUNTER_TURNS_PER_SIZE : null,
+      resultTag: null,
     };
     mode = 'move';
 
