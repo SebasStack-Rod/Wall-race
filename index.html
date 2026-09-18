@@ -45,6 +45,20 @@
     </fieldset>
 
     <fieldset>
+      <legend>Modo de partida</legend>
+      <select class="select-field" id="rulesetSelect">
+        <option value="classic">🎯 Clásico</option>
+        <option value="fog">🌫️ Niebla de guerra</option>
+        <option value="teams">🤝 2v2 (equipos)</option>
+        <option value="party">🎉 Fiesta</option>
+        <option value="maze">🧊 Laberinto (paredes al azar)</option>
+        <option value="blitz">⏱️ Contrarreloj</option>
+        <option value="mirror">🪞 Espejo</option>
+      </select>
+      <p class="field-hint" id="rulesetHint"></p>
+    </fieldset>
+
+    <fieldset>
       <legend>Tamaño del tablero</legend>
       <div class="segmented" id="sizeGroup">
         <input type="radio" name="size" id="s5" value="5"><label for="s5">5×5</label>
@@ -62,6 +76,9 @@
     <button id="startBtn">Comenzar partida</button>
 
     <div class="menu-links">
+      <button type="button" class="text-link" id="dailyLinkBtn">🗓️ Desafío diario</button>
+      <button type="button" class="text-link" id="achievementsLinkBtn">🏆 Logros</button>
+      <button type="button" class="text-link" id="editorLinkBtn">🧩 Editor de niveles</button>
       <button type="button" class="text-link" id="settingsLinkBtn">⚙️ Ajustes</button>
       <button type="button" class="text-link" id="skinsLinkBtn">🎨 Personalizar fichas</button>
       <button type="button" class="text-link" id="statsLinkBtn">📊 Ver estadísticas</button>
@@ -75,6 +92,7 @@
     <div>
       <h2>Quoridor</h2>
       <div id="turnIndicator"></div>
+      <span class="turn-timer hidden" id="turnTimerBadge"></span>
     </div>
     <div class="header-actions">
       <button class="ghost-btn" id="settingsBtn" aria-label="Ajustes" title="Ajustes">⚙️</button>
@@ -149,6 +167,14 @@
       <span>Sonido y vibración</span>
       <button type="button" class="ghost-btn" id="settingsSoundBtn"></button>
     </div>
+    <div class="settings-row">
+      <span>Recordatorio diario</span>
+      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+        <input type="time" id="reminderTimeInput" class="name-input" style="width:auto; flex:0 0 auto;" value="19:00">
+        <button type="button" class="ghost-btn" id="reminderToggleBtn">Activar</button>
+      </div>
+      <p class="field-hint" id="reminderHint">Te avisa cuando el desafío diario está listo.</p>
+    </div>
     <div class="modal-actions">
       <button class="secondary-btn" id="closeSettingsBtn">Cerrar</button>
     </div>
@@ -190,6 +216,65 @@
       <button class="secondary-btn" id="resetSkinsBtn">Restablecer</button>
       <button class="primary-btn" id="closeSkinsBtn">Cerrar</button>
     </div>
+  </div>
+</div>
+
+<div id="achievementsOverlay" class="overlay-backdrop hidden">
+  <div class="modal-card wide" id="achievementsCard">
+    <h2>Logros</h2>
+    <p class="ach-summary" id="achSummary"></p>
+    <div class="ach-grid" id="achGrid"></div>
+    <div class="modal-actions">
+      <button class="primary-btn" id="closeAchievementsBtn">Cerrar</button>
+    </div>
+  </div>
+</div>
+
+<div id="dailyOverlay" class="overlay-backdrop hidden">
+  <div class="modal-card" id="dailyCard">
+    <h2>Desafío diario</h2>
+    <div class="daily-status" id="dailyStatusBody"></div>
+    <div class="modal-actions">
+      <button class="primary-btn" id="playDailyBtn">Jugar</button>
+      <button class="secondary-btn" id="closeDailyBtn">Cerrar</button>
+    </div>
+  </div>
+</div>
+
+<div id="achievementToast"></div>
+
+<div id="editorScreen" class="hidden">
+  <div class="game-header">
+    <div><h2>Editor de niveles</h2></div>
+    <div class="header-actions">
+      <button class="ghost-btn" id="editorBackBtn">← Menú</button>
+    </div>
+  </div>
+  <p class="hint-line">Tocá entre dos casillas para poner o sacar una pared. Al guardar o jugar se valida que el diseño no deje a nadie sin camino posible.</p>
+  <div class="editor-toolbar">
+    <select class="select-field" id="editorSizeSelect" style="width:auto;">
+      <option value="5">5×5</option>
+      <option value="7">7×7</option>
+      <option value="9" selected>9×9</option>
+      <option value="11">11×11</option>
+    </select>
+    <button type="button" class="ghost-btn" id="editorClearBtn">🗑️ Limpiar</button>
+    <button type="button" class="ghost-btn" id="editorSaveBtn">💾 Guardar</button>
+    <button type="button" class="ghost-btn" id="editorPlayBtn">▶️ Jugar este diseño</button>
+  </div>
+  <div class="game-layout">
+    <div class="board-wrap">
+      <svg id="editorBoardSvg" viewBox="0 0 630 630" xmlns="http://www.w3.org/2000/svg">
+        <g id="editorGridGroup"></g>
+        <g id="editorWallsGroup"></g>
+      </svg>
+      <p class="board-note" id="editorFeedback">Diseñá tu tablero y guardalo para usarlo en una partida.</p>
+    </div>
+    <aside class="side-panel">
+      <h3>Niveles guardados</h3>
+      <div class="editor-list" id="editorLevelsList"></div>
+      <p class="editor-note">Un nivel guardado se puede elegir como "Laberinto" al empezar una partida nueva.</p>
+    </aside>
   </div>
 </div>
 

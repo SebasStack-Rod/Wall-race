@@ -13,6 +13,65 @@
   const SKIN_SHAPES = ['circle','square','triangle','diamond','star','hex'];
   const SHAPE_LABEL = { circle:'Círculo', square:'Cuadrado', triangle:'Triángulo', diamond:'Rombo', star:'Estrella', hex:'Hexágono' };
 
+  // ---------- modos de partida ----------
+  const RULESETS = {
+    classic: { label:'Clásico', hint:'Las reglas de siempre: movete y bloqueá con paredes hasta llegar al centro.' },
+    fog:     { label:'Niebla de guerra', hint:'Sólo ves las paredes cercanas a quien juega en ese turno. Las lejanas siguen bloqueando aunque no se vean.', forcePlayers:null },
+    teams:   { label:'2v2 (equipos)', hint:'Se juega siempre con 4 en el mismo dispositivo. Equipo A: jugadores 1 y 3. Equipo B: jugadores 2 y 4. Gana el equipo del primero en llegar al centro.', forcePlayers:4, forceLocal:true },
+    party:   { label:'Fiesta', hint:'De vez en cuando aparece un poder en el tablero: pared extra, turno extra o aturdir al rival mejor ubicado.' },
+    maze:    { label:'Laberinto', hint:'El tablero arranca con paredes al azar ya colocadas (o con tu propio diseño del editor de niveles), garantizando que siempre haya camino.' },
+    blitz:   { label:'Contrarreloj', hint:'Cada turno tiene 20 segundos. Si se acaba el tiempo, se juega un movimiento al azar y pasa el turno.' },
+    mirror:  { label:'Espejo', hint:'Sólo para 2 jugadores. Cada pared que colocás aparece también reflejada en el punto opuesto del tablero.', forcePlayers:2 },
+  };
+  const FOG_RADIUS = 2;
+  const BLITZ_SECONDS = 20;
+  const PARTY_TYPES = ['pared_extra','turno_extra','aturdido'];
+  // Plantillas de paredes para el modo Laberinto: cada una es una lista de segmentos
+  // relativos a un punto de anclaje (dr,dc,orientation). Se prueban una por una y si
+  // alguna rompe el camino de algún jugador, se descarta la plantilla completa.
+  const MAZE_TEMPLATES = [
+    [ [0,0,'h'], [0,1,'h'] ],                       // línea de 2 (pared larga)
+    [ [0,0,'v'], [1,0,'v'] ],                       // línea vertical de 2
+    [ [0,0,'h'], [0,1,'h'], [1,1,'v'] ],             // forma de L
+    [ [0,0,'v'], [0,0,'h'] ],                        // "caja" (esquina cerrada)
+    [ [0,0,'h'], [0,2,'h'] ],                        // dos paredes separadas (paso angosto en el medio)
+  ];
+
+  // ---------- logros ----------
+  function totalWins(s){ return (s.winsBySlot||[0,0,0,0]).reduce((a,b)=>a+b,0); }
+  const ACHIEVEMENTS = [
+    { id:'jugar_1', icon:'🎮', name:'Primer paso', desc:'Jugá tu primera partida.', check:s=> s.totalGames>=1 },
+    { id:'jugar_10', icon:'📅', name:'Habitué', desc:'Jugá 10 partidas.', check:s=> s.totalGames>=10 },
+    { id:'jugar_50', icon:'🗓️', name:'De la casa', desc:'Jugá 50 partidas.', check:s=> s.totalGames>=50 },
+    { id:'victoria_1', icon:'🥇', name:'Primera victoria', desc:'Ganá tu primera partida.', check:s=> totalWins(s)>=1 },
+    { id:'victoria_10', icon:'🏆', name:'Ganador serial', desc:'Sumá 10 victorias entre todos los jugadores.', check:s=> totalWins(s)>=10 },
+    { id:'victoria_50', icon:'👑', name:'Leyenda del tablero', desc:'Sumá 50 victorias entre todos los jugadores.', check:s=> totalWins(s)>=50 },
+    { id:'racha_3', icon:'🔥', name:'Rachero', desc:'Ganá 3 partidas seguidas con el mismo jugador.', check:s=> (s.streak&&s.streak.count>=3) },
+    { id:'racha_5', icon:'🚀', name:'Imparable', desc:'Ganá 5 partidas seguidas con el mismo jugador.', check:s=> (s.streak&&s.streak.count>=5) },
+    { id:'vs_ia_ganar', icon:'🤖', name:'Más listo que la máquina', desc:'Ganale una partida a la IA.', check:s=> s.vsCpu && s.vsCpu.won>=1 },
+    { id:'vs_ia_dificil', icon:'🧠', name:'Sin ayuda de nadie', desc:'Ganale a la IA en dificultad difícil.', check:s=> s.vsCpuHardWon>=1 },
+    { id:'vs_ia_10', icon:'⚙️', name:'Domador de bots', desc:'Ganale 10 partidas a la IA.', check:s=> s.vsCpu && s.vsCpu.won>=10 },
+    { id:'sin_paredes', icon:'🚫', name:'Camino directo', desc:'Ganá una partida sin colocar ninguna pared.', check:s=> s.noWallWins>=1 },
+    { id:'todas_paredes', icon:'🧱', name:'Arquitecto', desc:'Ganá una partida habiendo usado todas tus paredes.', check:s=> s.allWallsUsedWins>=1 },
+    { id:'rapido_15', icon:'⚡', name:'Directo al grano', desc:'Ganá una partida en 15 movimientos o menos.', check:s=> s.fastestWinMoves!=null && s.fastestWinMoves<=15 },
+    { id:'maraton_60', icon:'🐢', name:'Maratón', desc:'Jugá una partida de más de 60 movimientos en total.', check:s=> s.longestGameMoves>=60 },
+    { id:'tablero_5', icon:'🔹', name:'Sprint', desc:'Ganá una partida en un tablero de 5×5.', check:s=> s.sizeWins && s.sizeWins[5]>=1 },
+    { id:'tablero_11', icon:'🔷', name:'Territorio grande', desc:'Ganá una partida en un tablero de 11×11.', check:s=> s.sizeWins && s.sizeWins[11]>=1 },
+    { id:'cuatro_jugadores', icon:'👥', name:'Multitud', desc:'Ganá una partida de 4 jugadores.', check:s=> s.winsWith4>=1 },
+    { id:'modo_niebla', icon:'🌫️', name:'Ojo de águila', desc:'Ganá una partida en modo Niebla de guerra.', check:s=> s.modeWins && s.modeWins.fog>=1 },
+    { id:'modo_equipos', icon:'🤝', name:'Trabajo en equipo', desc:'Ganá una partida en modo 2v2.', check:s=> s.modeWins && s.modeWins.teams>=1 },
+    { id:'modo_fiesta', icon:'🎉', name:'El alma de la fiesta', desc:'Ganá una partida en modo Fiesta.', check:s=> s.modeWins && s.modeWins.party>=1 },
+    { id:'modo_laberinto', icon:'🧊', name:'Sin perderse', desc:'Ganá una partida en modo Laberinto.', check:s=> s.modeWins && s.modeWins.maze>=1 },
+    { id:'modo_blitz', icon:'⏱️', name:'Contra las cuerdas', desc:'Ganá una partida en modo Contrarreloj.', check:s=> s.modeWins && s.modeWins.blitz>=1 },
+    { id:'modo_espejo', icon:'🪞', name:'Simetría perfecta', desc:'Ganá una partida en modo Espejo.', check:s=> s.modeWins && s.modeWins.mirror>=1 },
+    { id:'todos_los_modos', icon:'🌈', name:'Probaste de todo', desc:'Jugá al menos una vez en los 6 modos especiales.', check:s=> s.modesPlayed && Object.keys(RULESETS).filter(k=>k!=='classic').every(k=> (s.modesPlayed[k]||0)>=1) },
+    { id:'desafio_1', icon:'📌', name:'Reto del día', desc:'Resolvé el desafío diario.', check:s=> s.daily && s.daily.completedCount>=1 },
+    { id:'desafio_racha_7', icon:'📆', name:'Semana completa', desc:'Completá el desafío diario 7 días seguidos.', check:s=> s.daily && s.daily.bestStreak>=7 },
+    { id:'personalizar_ficha', icon:'🎨', name:'Estilo propio', desc:'Cambiá el color o la forma de una ficha.', check:s=> !!s.skinsCustomized },
+    { id:'editor_1', icon:'🧩', name:'Diseñador', desc:'Creá y jugá un nivel propio en el editor.', check:s=> s.customLevelsPlayed>=1 },
+    { id:'paredes_100', icon:'🏗️', name:'Constructor', desc:'Colocá 100 paredes en total, sumando todas las partidas.', check:s=> s.totalWallsPlaced>=100 },
+  ];
+
   // ---------- DOM refs ----------
   const menuScreen = document.getElementById('menuScreen');
   const gameScreen = document.getElementById('gameScreen');
@@ -68,7 +127,41 @@
   const resetSkinsBtn = document.getElementById('resetSkinsBtn');
   const closeSkinsBtn = document.getElementById('closeSkinsBtn');
 
-  const overlayEls = { win:winOverlay, confirm:confirmOverlay, settings:settingsOverlay, tutorial:tutorialOverlay, stats:statsOverlay, skins:skinsOverlay };
+  const achievementsOverlay = document.getElementById('achievementsOverlay');
+  const achSummary = document.getElementById('achSummary');
+  const achGrid = document.getElementById('achGrid');
+  const closeAchievementsBtn = document.getElementById('closeAchievementsBtn');
+  const achievementsLinkBtn = document.getElementById('achievementsLinkBtn');
+  const achievementToast = document.getElementById('achievementToast');
+
+  const dailyOverlay = document.getElementById('dailyOverlay');
+  const dailyStatusBody = document.getElementById('dailyStatusBody');
+  const playDailyBtn = document.getElementById('playDailyBtn');
+  const closeDailyBtn = document.getElementById('closeDailyBtn');
+  const dailyLinkBtn = document.getElementById('dailyLinkBtn');
+
+  const rulesetSelect = document.getElementById('rulesetSelect');
+  const rulesetHint = document.getElementById('rulesetHint');
+  const turnTimerBadge = document.getElementById('turnTimerBadge');
+
+  const reminderTimeInput = document.getElementById('reminderTimeInput');
+  const reminderToggleBtn = document.getElementById('reminderToggleBtn');
+  const reminderHint = document.getElementById('reminderHint');
+
+  const editorLinkBtn = document.getElementById('editorLinkBtn');
+  const editorScreen = document.getElementById('editorScreen');
+  const editorBackBtn = document.getElementById('editorBackBtn');
+  const editorSizeSelect = document.getElementById('editorSizeSelect');
+  const editorClearBtn = document.getElementById('editorClearBtn');
+  const editorSaveBtn = document.getElementById('editorSaveBtn');
+  const editorPlayBtn = document.getElementById('editorPlayBtn');
+  const editorBoardSvg = document.getElementById('editorBoardSvg');
+  const editorGridGroup = document.getElementById('editorGridGroup');
+  const editorWallsGroup = document.getElementById('editorWallsGroup');
+  const editorFeedback = document.getElementById('editorFeedback');
+  const editorLevelsList = document.getElementById('editorLevelsList');
+
+  const overlayEls = { win:winOverlay, confirm:confirmOverlay, settings:settingsOverlay, tutorial:tutorialOverlay, stats:statsOverlay, skins:skinsOverlay, achievements:achievementsOverlay, daily:dailyOverlay };
 
   let state = null;
   let mode = 'move'; // 'move' | 'wall'
@@ -86,6 +179,43 @@
     });
   }
   function cellSize(){ return BOARD_PX / state.size; }
+  function todayKey(offsetDays){
+    const d = new Date();
+    if(offsetDays) d.setDate(d.getDate()+offsetDays);
+    return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+  }
+  function hashStringToSeed(str){
+    let h = 1779033703 ^ str.length;
+    for(let i=0;i<str.length;i++){
+      h = Math.imul(h ^ str.charCodeAt(i), 3432918353);
+      h = (h << 13) | (h >>> 19);
+    }
+    return function(){
+      h = Math.imul(h ^ (h >>> 16), 2246822507);
+      h = Math.imul(h ^ (h >>> 13), 3266489909);
+      h ^= h >>> 16;
+      return (h >>> 0) / 4294967296;
+    };
+  }
+  function bfsShortestPath(startR,startC,targetR,targetC,blockedSet,size){
+    if(startR===targetR && startC===targetC) return 0;
+    const visited = new Set([startR+','+startC]);
+    const queue = [[startR,startC,0]];
+    while(queue.length){
+      const [r,c,d] = queue.shift();
+      for(const [dr,dc] of DIRS4){
+        const nr=r+dr, nc=c+dc;
+        if(nr<0||nc<0||nr>=size||nc>=size) continue;
+        const key = nr+','+nc;
+        if(visited.has(key)) continue;
+        if(isBlocked(r,c,nr,nc,blockedSet)) continue;
+        if(nr===targetR && nc===targetC) return d+1;
+        visited.add(key);
+        queue.push([nr,nc,d+1]);
+      }
+    }
+    return Infinity;
+  }
 
   function edgeKey(r1,c1,r2,c2){
     if(r1>r2 || (r1===r2 && c1>c2)){ const tr=r1,tc=c1; r1=r2;c1=c2;r2=tr;c2=tc; }
@@ -170,6 +300,77 @@
     }
     return { valid:true, edges };
   }
+  // ---------- Modo Espejo: valida y arma también la pared reflejada ----------
+  function mirrorSlot(r,c){ return { r: state.size-2-r, c: state.size-2-c }; }
+  function evaluateWallForMode(r,c,orientation){
+    const base = evaluateWallPlacement(r,c,orientation);
+    if(!base.valid || state.ruleset!=='mirror') return base;
+    const m = mirrorSlot(r,c);
+    if(m.r===r && m.c===c) return base; // cae en su propio reflejo, no hace falta espejo aparte
+    if(!canPlaceWallSlot(m.r,m.c,orientation)) return { valid:false };
+    const mEdges = wallEdges(m.r,m.c,orientation);
+    const testSet = new Set(state.blockedEdges);
+    base.edges.forEach(e=> testSet.add(edgeKey(e[0],e[1],e[2],e[3])));
+    mEdges.forEach(e=> testSet.add(edgeKey(e[0],e[1],e[2],e[3])));
+    for(const p of state.players){
+      if(!hasPath(p.r,p.c,state.center.r,state.center.c,testSet,state.size)) return { valid:false };
+    }
+    return { valid:true, edges:base.edges, mirrorEdges:mEdges };
+  }
+
+  // ---------- Generador de paredes al azar (modo Laberinto y Desafío diario) ----------
+  // localState: objeto con {size, occupied, blockedEdges, walls, players} — puede ser
+  // el state real de una partida (ya con jugadores) o uno temporal sólo para generar.
+  function tryPlaceEnvWall(localState, r, c, orientation){
+    const size = localState.size;
+    if(r<0||c<0||r>size-2||c>size-2) return false;
+    if(localState.occupied[r][c]) return false;
+    if(orientation==='h'){
+      if(c>0 && localState.occupied[r][c-1]==='h') return false;
+      if(c<size-2 && localState.occupied[r][c+1]==='h') return false;
+    } else {
+      if(r>0 && localState.occupied[r-1][c]==='v') return false;
+      if(r<size-2 && localState.occupied[r+1][c]==='v') return false;
+    }
+    const edges = wallEdges(r,c,orientation);
+    const testSet = new Set(localState.blockedEdges);
+    edges.forEach(e=> testSet.add(edgeKey(e[0],e[1],e[2],e[3])));
+    for(const p of localState.players){
+      if(!hasPath(p.r,p.c,localState.center.r,localState.center.c,testSet,size)) return false;
+    }
+    localState.occupied[r][c] = orientation;
+    edges.forEach(e=> localState.blockedEdges.add(edgeKey(e[0],e[1],e[2],e[3])));
+    localState.walls.push({ r, c, orientation, color:'var(--line)', env:true });
+    return true;
+  }
+  function generateRandomWalls(localState, count, rng){
+    const random = rng || Math.random;
+    const size = localState.size;
+    let placed = 0, attempts = 0;
+    while(placed < count && attempts < 200){
+      attempts++;
+      const template = MAZE_TEMPLATES[Math.floor(random()*MAZE_TEMPLATES.length)];
+      const baseR = Math.floor(random()*(size-1));
+      const baseC = Math.floor(random()*(size-1));
+      const segs = template.map(([dr,dc,orientation])=> ({ r:baseR+dr, c:baseC+dc, orientation }));
+      const snapshotOccupied = localState.occupied.map(row=> row.slice());
+      const snapshotBlocked = new Set(localState.blockedEdges);
+      const snapshotWallsLen = localState.walls.length;
+      let ok = true;
+      for(const seg of segs){
+        if(!tryPlaceEnvWall(localState, seg.r, seg.c, seg.orientation)){ ok = false; break; }
+      }
+      if(!ok){
+        localState.occupied = snapshotOccupied;
+        localState.blockedEdges = snapshotBlocked;
+        localState.walls.length = snapshotWallsLen;
+        continue;
+      }
+      placed++;
+    }
+    return placed;
+  }
+
   function wallRect(r,c,orientation,cs){
     const thickness = cs*0.16;
     const inset = cs*0.06;
@@ -230,7 +431,13 @@
   }
 
   function advanceTurn(){
-    state.currentPlayerIndex = (state.currentPlayerIndex+1) % state.players.length;
+    let next = state.currentPlayerIndex;
+    for(let i=0;i<state.players.length;i++){
+      next = (next+1) % state.players.length;
+      if(state.players[next].stunned){ state.players[next].stunned = false; continue; }
+      break;
+    }
+    state.currentPlayerIndex = next;
     state.validMoves = computeValidMoves(state.currentPlayerIndex);
     mode = 'move';
   }
@@ -241,7 +448,7 @@
     if(!el) return;
     el.classList.remove('hidden');
     overlayStack.push(name);
-    if(!gameScreen.classList.contains('hidden')) invalidateBotTimer();
+    if(!gameScreen.classList.contains('hidden')){ invalidateBotTimer(); clearTurnTimer(); }
   }
   function closeOverlay(name){
     const el = overlayEls[name];
@@ -253,6 +460,7 @@
     }
     if(overlayStack.length===0 && !gameScreen.classList.contains('hidden') && state && !state.winner){
       scheduleBotTurnIfNeeded();
+      startTurnTimer();
     }
   }
   function closeTopOverlay(){
@@ -340,38 +548,164 @@
   }
 
   // ---------- estadísticas locales ----------
+  function blankStats(){
+    return {
+      totalGames:0, winsBySlot:[0,0,0,0], streak:{slot:null,count:0}, vsCpu:{played:0,won:0},
+      vsCpuHardWon:0, winsWith4:0,
+      modesPlayed:{ fog:0, teams:0, party:0, maze:0, blitz:0, mirror:0 },
+      modeWins:{ fog:0, teams:0, party:0, maze:0, blitz:0, mirror:0 },
+      sizeWins:{5:0,7:0,9:0,11:0},
+      noWallWins:0, allWallsUsedWins:0,
+      fastestWinMoves:null, longestGameMoves:0, totalWallsPlaced:0,
+      daily:{ lastDate:null, streak:0, bestStreak:0, completedCount:0, bestMoves:{} },
+      customLevelsPlayed:0, skinsCustomized:false, partyStuns:0,
+      achievementsUnlocked:[],
+    };
+  }
   function loadStats(){
+    const base = blankStats();
     try{
       const raw = localStorage.getItem('quoridor_stats');
       if(raw){
-        const parsed = JSON.parse(raw);
-        return {
-          totalGames: parsed.totalGames || 0,
-          winsBySlot: Array.isArray(parsed.winsBySlot) ? [0,1,2,3].map(i=> parsed.winsBySlot[i]||0) : [0,0,0,0],
-          streak: (parsed.streak && typeof parsed.streak.count==='number') ? parsed.streak : { slot:null, count:0 },
-          vsCpu: parsed.vsCpu || { played:0, won:0 },
-        };
+        const parsed = JSON.parse(raw) || {};
+        base.totalGames = parsed.totalGames || 0;
+        base.winsBySlot = Array.isArray(parsed.winsBySlot) ? [0,1,2,3].map(i=> parsed.winsBySlot[i]||0) : base.winsBySlot;
+        base.streak = (parsed.streak && typeof parsed.streak.count==='number') ? parsed.streak : base.streak;
+        base.vsCpu = parsed.vsCpu || base.vsCpu;
+        base.vsCpuHardWon = parsed.vsCpuHardWon || 0;
+        base.winsWith4 = parsed.winsWith4 || 0;
+        base.modesPlayed = Object.assign(base.modesPlayed, parsed.modesPlayed||{});
+        base.modeWins = Object.assign(base.modeWins, parsed.modeWins||{});
+        base.sizeWins = Object.assign(base.sizeWins, parsed.sizeWins||{});
+        base.noWallWins = parsed.noWallWins || 0;
+        base.allWallsUsedWins = parsed.allWallsUsedWins || 0;
+        base.fastestWinMoves = (typeof parsed.fastestWinMoves==='number') ? parsed.fastestWinMoves : null;
+        base.longestGameMoves = parsed.longestGameMoves || 0;
+        base.totalWallsPlaced = parsed.totalWallsPlaced || 0;
+        base.daily = Object.assign(base.daily, parsed.daily||{});
+        base.daily.bestMoves = Object.assign({}, parsed.daily && parsed.daily.bestMoves);
+        base.customLevelsPlayed = parsed.customLevelsPlayed || 0;
+        base.skinsCustomized = !!parsed.skinsCustomized;
+        base.partyStuns = parsed.partyStuns || 0;
+        base.achievementsUnlocked = Array.isArray(parsed.achievementsUnlocked) ? parsed.achievementsUnlocked : [];
       }
     }catch(e){}
-    return { totalGames:0, winsBySlot:[0,0,0,0], streak:{slot:null,count:0}, vsCpu:{played:0,won:0} };
+    return base;
   }
   function saveStats(){ try{ localStorage.setItem('quoridor_stats', JSON.stringify(statsData)); }catch(e){} }
   let statsData = loadStats();
-  function recordGameResult(winnerSlot, isCpuGame){
+
+  function recordGameResult(summary){
+    const winnerSlot = summary.winnerSlot;
     statsData.totalGames += 1;
     statsData.winsBySlot[winnerSlot] = (statsData.winsBySlot[winnerSlot]||0) + 1;
-    if(statsData.streak.slot === winnerSlot){
-      statsData.streak.count += 1;
-    } else {
-      statsData.streak.slot = winnerSlot;
-      statsData.streak.count = 1;
-    }
-    if(isCpuGame){
+    if(statsData.streak.slot === winnerSlot) statsData.streak.count += 1;
+    else { statsData.streak.slot = winnerSlot; statsData.streak.count = 1; }
+    if(summary.isCpuGame){
       statsData.vsCpu.played += 1;
-      if(winnerSlot === 0) statsData.vsCpu.won += 1;
+      if(winnerSlot === 0){
+        statsData.vsCpu.won += 1;
+        if(summary.isCpuHard) statsData.vsCpuHardWon += 1;
+      }
     }
+    if(summary.playersCount===4) statsData.winsWith4 += 1;
+    if(summary.ruleset && summary.ruleset!=='classic'){
+      statsData.modeWins[summary.ruleset] = (statsData.modeWins[summary.ruleset]||0) + 1;
+    }
+    if(summary.size && statsData.sizeWins[summary.size]!=null) statsData.sizeWins[summary.size] += 1;
+    if(summary.wallsUsedByWinner===0) statsData.noWallWins += 1;
+    if(summary.wallsUsedByWinner!=null && summary.wallsUsedByWinner>=summary.wallsStart) statsData.allWallsUsedWins += 1;
+    if(typeof summary.movesUsed==='number'){
+      if(statsData.fastestWinMoves==null || summary.movesUsed<statsData.fastestWinMoves) statsData.fastestWinMoves = summary.movesUsed;
+    }
+    if(typeof summary.totalMovesThisGame==='number' && summary.totalMovesThisGame>statsData.longestGameMoves){
+      statsData.longestGameMoves = summary.totalMovesThisGame;
+    }
+    statsData.totalWallsPlaced += (summary.wallsPlacedThisGame||0);
+    saveStats();
+    return checkAchievements();
+  }
+  function recordModePlayed(ruleset){
+    if(!ruleset || ruleset==='classic') return;
+    statsData.modesPlayed[ruleset] = (statsData.modesPlayed[ruleset]||0) + 1;
     saveStats();
   }
+  function recordDailyResult(movesUsed, par){
+    const today = todayKey();
+    const d = statsData.daily;
+    const isFirstToday = d.lastDate !== today;
+    if(isFirstToday){
+      const yesterday = todayKey(-1);
+      d.streak = (d.lastDate === yesterday) ? d.streak + 1 : 1;
+      d.bestStreak = Math.max(d.bestStreak, d.streak);
+      d.completedCount += 1;
+      d.lastDate = today;
+    }
+    if(d.bestMoves[today]==null || movesUsed < d.bestMoves[today]) d.bestMoves[today] = movesUsed;
+    saveStats();
+    return checkAchievements();
+  }
+  function recordSkinCustomized(){
+    if(statsData.skinsCustomized) return;
+    statsData.skinsCustomized = true;
+    saveStats();
+    checkAchievements();
+  }
+  function recordCustomLevelPlayed(){
+    statsData.customLevelsPlayed += 1;
+    saveStats();
+    checkAchievements();
+  }
+  function recordPartyStun(){
+    statsData.partyStuns += 1;
+    saveStats();
+  }
+
+  // ---------- logros: chequeo + UI ----------
+  function checkAchievements(){
+    const fresh = [];
+    ACHIEVEMENTS.forEach(a=>{
+      if(statsData.achievementsUnlocked.indexOf(a.id)===-1 && a.check(statsData)){
+        statsData.achievementsUnlocked.push(a.id);
+        fresh.push(a);
+      }
+    });
+    if(fresh.length){
+      saveStats();
+      showAchievementToasts(fresh);
+    }
+    return fresh;
+  }
+  let toastQueue = [];
+  let toastShowing = false;
+  function showAchievementToasts(list){
+    toastQueue = toastQueue.concat(list);
+    if(!toastShowing) advanceToastQueue();
+  }
+  function advanceToastQueue(){
+    if(!toastQueue.length){ toastShowing=false; return; }
+    toastShowing = true;
+    const a = toastQueue.shift();
+    achievementToast.textContent = `🏆 Nuevo logro: ${a.name}`;
+    achievementToast.classList.add('show');
+    setTimeout(()=>{
+      achievementToast.classList.remove('show');
+      setTimeout(advanceToastQueue, 260);
+    }, 2600);
+  }
+  function renderAchievementsOverlay(){
+    const unlocked = statsData.achievementsUnlocked;
+    achSummary.textContent = `${unlocked.length} / ${ACHIEVEMENTS.length} desbloqueados`;
+    achGrid.innerHTML = ACHIEVEMENTS.map(a=>{
+      const is = unlocked.indexOf(a.id)!==-1;
+      return `<div class="ach-row ${is?'unlocked':''}">
+        <span class="ach-icon">${is ? a.icon : '🔒'}</span>
+        <span class="ach-text"><span class="ach-name">${escapeHtml(a.name)}</span><div class="ach-desc">${escapeHtml(a.desc)}</div></span>
+      </div>`;
+    }).join('');
+  }
+  achievementsLinkBtn.addEventListener('click', ()=>{ renderAchievementsOverlay(); openOverlay('achievements'); });
+  closeAchievementsBtn.addEventListener('click', ()=> closeOverlay('achievements'));
   function renderStatsOverlay(){
     const names = loadPlayerNames();
     let rows = '';
@@ -471,6 +805,7 @@
       pieceSkins[otherIdx].color = currentColorOfSlot;
     }
     saveSkins();
+    recordSkinCustomized();
     renderSkinsOverlay();
   }
   skinsBody.addEventListener('click', e=>{
@@ -479,7 +814,7 @@
     const colorBtn = e.target.closest('.color-swatch');
     if(colorBtn){ setSkinColor(activeSkinSlot, colorBtn.dataset.color); return; }
     const shapeBtn = e.target.closest('.shape-swatch');
-    if(shapeBtn){ pieceSkins[activeSkinSlot].shape = shapeBtn.dataset.shape; saveSkins(); renderSkinsOverlay(); return; }
+    if(shapeBtn){ pieceSkins[activeSkinSlot].shape = shapeBtn.dataset.shape; saveSkins(); recordSkinCustomized(); renderSkinsOverlay(); return; }
   });
   resetSkinsBtn.addEventListener('click', ()=>{
     pieceSkins = defaultSkins();
@@ -554,7 +889,7 @@
     for(let r=Math.max(minSlot,opp.r-radius); r<=Math.min(maxSlot,opp.r+radius); r++){
       for(let c=Math.max(minSlot,opp.c-radius); c<=Math.min(maxSlot,opp.c+radius); c++){
         for(const orientation of ['h','v']){
-          const evalRes = evaluateWallPlacement(r,c,orientation);
+          const evalRes = evaluateWallForMode(r,c,orientation);
           if(!evalRes.valid) continue;
           const testSet = new Set(state.blockedEdges);
           evalRes.edges.forEach(e=> testSet.add(edgeKey(e[0],e[1],e[2],e[3])));
@@ -617,39 +952,150 @@
     }, 550 + Math.random()*450);
   }
 
+  function teamOf(playerId){
+    if(state.ruleset!=='teams') return null;
+    return (playerId===0 || playerId===2) ? 'A' : 'B';
+  }
+  function finishGame(p){
+    state.winner = p;
+    const winnerTeam = teamOf(p.id);
+    const wallsStart = p.wallsStart;
+    const wallsUsedByWinner = wallsStart - p.wallsLeft;
+    if(state.isDaily){
+      recordDailyResult(state.moveCount, state.dailyPar);
+    } else {
+      recordGameResult({
+        winnerSlot: p.id,
+        isCpuGame: !!state.isCpuGame,
+        isCpuHard: !!(state.isCpuGame && state.players[1] && state.players[1].difficulty==='hard'),
+        ruleset: state.ruleset,
+        size: state.size,
+        playersCount: state.players.length,
+        wallsUsedByWinner, wallsStart,
+        movesUsed: state.moveCount,
+        totalMovesThisGame: state.moveCount,
+        wallsPlacedThisGame: state.walls.filter(w=>!w.env).length,
+      });
+    }
+    clearTurnTimer();
+    playWinSound();
+    vibrate([0,40,60,40,140]);
+    showWinOverlay(p, winnerTeam);
+  }
+  function maybePickUpPower(p){
+    if(state.ruleset!=='party' || !state.powerUp) return false;
+    if(p.r!==state.powerUp.r || p.c!==state.powerUp.c) return false;
+    const type = state.powerUp.type;
+    state.powerUp = null;
+    if(type==='pared_extra'){
+      p.wallsLeft += 1;
+    } else if(type==='turno_extra'){
+      state.skipAdvance = true;
+    } else if(type==='aturdido'){
+      const targetIdx = otherPlayerClosestToCenter(state.currentPlayerIndex);
+      if(targetIdx!=null){ state.players[targetIdx].stunned = true; recordPartyStun(); }
+    }
+    return true;
+  }
+  function maybeSpawnPower(){
+    if(state.ruleset!=='party') return;
+    if(state.powerUp) return;
+    if(state.currentPlayerIndex!==0) return;
+    if(Math.random()>0.45) return;
+    const occupiedCells = new Set(state.players.map(p=> p.r+','+p.c));
+    occupiedCells.add(state.center.r+','+state.center.c);
+    let tries=0;
+    while(tries<40){
+      tries++;
+      const r = Math.floor(Math.random()*state.size);
+      const c = Math.floor(Math.random()*state.size);
+      if(occupiedCells.has(r+','+c)) continue;
+      state.powerUp = { r, c, type: PARTY_TYPES[Math.floor(Math.random()*PARTY_TYPES.length)] };
+      return;
+    }
+  }
+
   function performMove(r,c){
     if(state.winner) return;
     const idx = state.currentPlayerIndex;
     const p = state.players[idx];
     p.r = r; p.c = c;
+    state.moveCount = (state.moveCount||0) + 1;
+    maybePickUpPower(p);
     if(r===state.center.r && c===state.center.c){
-      state.winner = p;
-      recordGameResult(p.id, !!state.isCpuGame);
       render(idx);
-      playWinSound();
-      vibrate([0,40,60,40,140]);
-      showWinOverlay(p);
+      finishGame(p);
       return;
     }
     playMoveSound();
     vibrate(12);
+    if(state.skipAdvance){
+      state.skipAdvance = false;
+      state.validMoves = computeValidMoves(idx);
+      render(idx);
+      return;
+    }
     advanceTurn();
+    maybeSpawnPower();
     render(idx);
   }
 
   function commitWall(r,c,orientation){
     if(state.winner) return;
-    const evalRes = evaluateWallPlacement(r,c,orientation);
+    const evalRes = evaluateWallForMode(r,c,orientation);
     if(!evalRes.valid) return;
     const cp = state.players[state.currentPlayerIndex];
     state.occupied[r][c] = orientation;
     evalRes.edges.forEach(e=> state.blockedEdges.add(edgeKey(e[0],e[1],e[2],e[3])));
     state.walls.push({ r, c, orientation, color: cp.color });
+    if(evalRes.mirrorEdges){
+      const m = mirrorSlot(r,c);
+      state.occupied[m.r][m.c] = orientation;
+      evalRes.mirrorEdges.forEach(e=> state.blockedEdges.add(edgeKey(e[0],e[1],e[2],e[3])));
+      state.walls.push({ r:m.r, c:m.c, orientation, color: cp.color });
+    }
     cp.wallsLeft -= 1;
+    state.moveCount = (state.moveCount||0) + 1;
     playWallSound();
     vibrate(18);
     advanceTurn();
+    maybeSpawnPower();
     render();
+  }
+
+  // ---------- Contrarreloj: temporizador por turno ----------
+  let turnTimerInterval = null;
+  function clearTurnTimer(){
+    if(turnTimerInterval){ clearInterval(turnTimerInterval); turnTimerInterval = null; }
+    turnTimerBadge.classList.add('hidden');
+  }
+  function startTurnTimer(){
+    clearTurnTimer();
+    if(!state || state.ruleset!=='blitz' || state.winner) return;
+    const cp = state.players[state.currentPlayerIndex];
+    if(cp && cp.isCPU) return;
+    state.turnTimeLeft = BLITZ_SECONDS;
+    turnTimerBadge.classList.remove('hidden');
+    turnTimerBadge.classList.remove('low');
+    turnTimerBadge.textContent = `⏱️ ${state.turnTimeLeft}s`;
+    turnTimerInterval = setInterval(()=>{
+      state.turnTimeLeft -= 1;
+      if(state.turnTimeLeft<=5) turnTimerBadge.classList.add('low');
+      turnTimerBadge.textContent = `⏱️ ${Math.max(0,state.turnTimeLeft)}s`;
+      if(state.turnTimeLeft<=0){
+        clearTurnTimer();
+        autoPlayRandomMove();
+      }
+    }, 1000);
+  }
+  function autoPlayRandomMove(){
+    if(!state || state.winner) return;
+    const idx = state.currentPlayerIndex;
+    const moves = state.validMoves;
+    if(!moves.length) return;
+    const scored = moves.map(m=> ({ m, d: distanceToCenter(m.r, m.c, state.blockedEdges) }));
+    scored.sort((a,b)=> a.d-b.d);
+    performMove(scored[0].m.r, scored[0].m.c);
   }
 
   // ---------- shapes ----------
@@ -752,10 +1198,20 @@
     movesEl.innerHTML = movesHTML;
 
     let wallsHTML = '';
+    const fogCenter = (state.ruleset==='fog' && activePlayer) ? activePlayer : null;
     for(const w of state.walls){
+      if(fogCenter){
+        const dist = Math.max(Math.abs(w.r-fogCenter.r), Math.abs(w.c-fogCenter.c));
+        if(dist > FOG_RADIUS) continue;
+      }
       const rect = wallRect(w.r,w.c,w.orientation,cs);
       const rx = rect.h>rect.w ? rect.w*0.4 : rect.h*0.4;
       wallsHTML += `<rect x="${rect.x}" y="${rect.y}" width="${rect.w}" height="${rect.h}" rx="${rx}" fill="${w.color}" stroke="rgba(0,0,0,0.3)" stroke-width="1"/>`;
+    }
+    if(state.ruleset==='party' && state.powerUp){
+      const pc=(state.powerUp.c+0.5)*cs, pr=(state.powerUp.r+0.5)*cs;
+      const icon = state.powerUp.type==='pared_extra' ? '🧱' : (state.powerUp.type==='turno_extra' ? '⭐' : '💥');
+      wallsHTML += `<g class="power-token"><circle cx="${pc}" cy="${pr}" r="${cs*0.32}" fill="var(--accent)" opacity="0.25" class="spin"/><text x="${pc}" y="${pr}" font-size="${cs*0.4}" text-anchor="middle" dominant-baseline="central">${icon}</text></g>`;
     }
     wallsEl.innerHTML = wallsHTML;
 
@@ -775,16 +1231,24 @@
     updateSidePanel();
     updateModeUI();
     scheduleBotTurnIfNeeded();
+    startTurnTimer();
   }
 
   function updateHeader(){
     if(state.winner){
-      turnIndicator.textContent = `¡${state.winner.name} ganó!`;
+      const team = teamOf(state.winner.id);
+      turnIndicator.textContent = team ? `¡Equipo ${team} ganó! (${state.winner.name})` : `¡${state.winner.name} ganó!`;
       turnIndicator.style.color = state.winner.color;
       return;
     }
     const cp = state.players[state.currentPlayerIndex];
-    turnIndicator.textContent = `Turno de ${cp.name}`;
+    if(state.isDaily){
+      turnIndicator.textContent = `Desafío diario · ${state.moveCount||0} movimiento${(state.moveCount||0)===1?'':'s'} · par ${state.dailyPar}`;
+      turnIndicator.style.color = cp.color;
+      return;
+    }
+    const team = teamOf(cp.id);
+    turnIndicator.textContent = team ? `Turno de ${cp.name} (Equipo ${team})` : `Turno de ${cp.name}`;
     turnIndicator.style.color = cp.color;
   }
 
@@ -793,19 +1257,34 @@
       const active = (i===state.currentPlayerIndex && !state.winner);
       const bg = active ? hexToRgba(p.color,0.12) : 'transparent';
       const cpuTag = p.isCPU ? '<span class="cpu-tag">IA</span>' : '';
+      const team = teamOf(p.id);
+      const teamTag = team ? `<span class="cpu-tag">Equipo ${team}</span>` : '';
+      const stunTag = p.stunned ? '<span class="cpu-tag">😵 aturdido</span>' : '';
       return `<li class="player-row ${active?'active':''}" style="--pc:${p.color}; --pc-bg:${bg}">
         <span class="row-icon">${smallShapeSVG(p.shape,p.color,22)}</span>
-        <span class="player-name">${escapeHtml(p.name)}${cpuTag}</span>
+        <span class="player-name">${escapeHtml(p.name)}${cpuTag}${teamTag}${stunTag}</span>
         <span class="wall-count">${p.wallsLeft} <span class="wall-label">paredes</span></span>
       </li>`;
     }).join('');
   }
 
   // ---------- win overlay ----------
-  function showWinOverlay(p){
-    winTitle.textContent = `¡${p.name} ganó!`;
-    winTitle.style.color = p.color;
-    winCard.style.setProperty('--wc', p.color);
+  function showWinOverlay(p, team){
+    if(state.isDaily){
+      const par = state.dailyPar;
+      const used = state.moveCount;
+      winTitle.textContent = '¡Desafío diario resuelto!';
+      winTitle.style.color = p.color;
+      winCard.style.setProperty('--wc', p.color);
+      const msgEl = winCard.querySelector('p');
+      if(msgEl) msgEl.textContent = `Lo resolviste en ${used} movimiento${used===1?'':'s'} (par: ${par}). ${used<=par ? '¡Igualaste o mejoraste el par!' : 'Volvé mañana por un nuevo tablero.'}`;
+    } else {
+      winTitle.textContent = team ? `¡Equipo ${team} ganó!` : `¡${p.name} ganó!`;
+      winTitle.style.color = p.color;
+      winCard.style.setProperty('--wc', p.color);
+      const msgEl = winCard.querySelector('p');
+      if(msgEl) msgEl.textContent = team ? `${p.name} llegó primero al centro para su equipo.` : 'Podés jugar otra ronda con la misma configuración o cambiar los ajustes.';
+    }
     openOverlay('win');
   }
   function hideWinOverlay(){
@@ -816,16 +1295,20 @@
   function initGame(playersCount, size, options){
     options = options || {};
     invalidateBotTimer();
+    clearTurnTimer();
     const mid = (size-1)/2;
     const slots = {
       top:{r:0,c:mid}, right:{r:mid,c:size-1}, bottom:{r:size-1,c:mid}, left:{r:mid,c:0}
     };
     let order;
-    if(playersCount===2) order=['top','bottom'];
+    if(playersCount===1) order=['top'];
+    else if(playersCount===2) order=['top','bottom'];
     else if(playersCount===3) order=['top','right','bottom'];
     else order=['top','right','bottom','left'];
 
-    const wallsEach = wallsPerPlayer(size, playersCount);
+    const ruleset = options.ruleset || 'classic';
+    const isDaily = !!options.isDaily;
+    const wallsEach = isDaily ? 0 : wallsPerPlayer(size, playersCount);
     const names = options.names || loadPlayerNames();
     const isCpu = !!options.isCpu;
     const difficulty = options.difficulty || 'easy';
@@ -841,8 +1324,10 @@
         r: slots[slotKey].r,
         c: slots[slotKey].c,
         wallsLeft: wallsEach,
+        wallsStart: wallsEach,
         isCPU: isCPU,
         difficulty: difficulty,
+        stunned: false,
       };
     });
 
@@ -857,8 +1342,31 @@
       winner: null,
       validMoves: [],
       isCpuGame: isCpu,
+      ruleset,
+      moveCount: 0,
+      powerUp: null,
+      skipAdvance: false,
+      isDaily,
+      dailyPar: null,
     };
     mode = 'move';
+
+    if(Array.isArray(options.presetWalls) && options.presetWalls.length){
+      options.presetWalls.forEach(w=> tryPlaceEnvWall(state, w.r, w.c, w.orientation));
+      if(options.isCustomLevel) recordCustomLevelPlayed();
+    } else if(ruleset==='maze' && !isDaily){
+      generateRandomWalls(state, 3 + Math.floor(Math.random()*2), Math.random);
+    } else if(isDaily && Array.isArray(options.dailyWalls)){
+      options.dailyWalls.forEach(w=> tryPlaceEnvWall(state, w.r, w.c, w.orientation));
+    }
+
+    if(isDaily){
+      state.dailyPar = bfsShortestPath(players[0].r, players[0].c, mid, mid, state.blockedEdges, size);
+    } else {
+      recordModePlayed(ruleset);
+    }
+    if(ruleset==='party') maybeSpawnPower();
+
     state.validMoves = computeValidMoves(0);
     render();
   }
@@ -907,7 +1415,7 @@
   function updateWallPreview(pt){
     const cs = cellSize();
     const slot = getWallSlotFromPoint(pt.x, pt.y);
-    const evalRes = evaluateWallPlacement(slot.r, slot.c, slot.orientation);
+    const evalRes = evaluateWallForMode(slot.r, slot.c, slot.orientation);
     slot.valid = evalRes.valid;
     previewSlot = slot;
     const rect = wallRect(slot.r, slot.c, slot.orientation, cs);
@@ -925,12 +1433,17 @@
     previewEl.setAttribute('opacity','0');
   }
 
-  // ---------- menú: modo / dificultad / nombres ----------
+  // ---------- menú: modo / dificultad / nombres / modo de partida ----------
+  function currentRuleset(){ return rulesetSelect.value || 'classic'; }
   function currentMode(){
+    const rs = RULESETS[currentRuleset()];
+    if(rs && rs.forceLocal) return 'local';
     const r = document.querySelector('input[name="gmode"]:checked');
     return r ? r.value : 'local';
   }
   function currentPlayersCount(){
+    const rs = RULESETS[currentRuleset()];
+    if(rs && rs.forcePlayers) return rs.forcePlayers;
     if(currentMode()==='cpu') return 2;
     const r = document.querySelector('input[name="players"]:checked');
     return r ? +r.value : 2;
@@ -953,11 +1466,22 @@
     namesContainer.innerHTML = html;
   }
   function updateMenuVisibility(){
+    const rs = RULESETS[currentRuleset()];
+    rulesetHint.textContent = rs ? rs.hint : '';
+    document.getElementById('modeCpu').disabled = !!(rs && rs.forceLocal);
+    if(rs && rs.forceLocal){ document.getElementById('modeLocal').checked = true; }
     const m = currentMode();
     difficultyFieldset.classList.toggle('hidden', m!=='cpu');
-    playersFieldset.classList.toggle('hidden', m==='cpu');
+    if(rs && rs.forcePlayers){
+      playersFieldset.classList.add('hidden');
+      const el = document.getElementById('p'+rs.forcePlayers);
+      if(el) el.checked = true;
+    } else {
+      playersFieldset.classList.toggle('hidden', m==='cpu');
+    }
     renderNameInputs(currentPlayersCount(), m==='cpu');
   }
+  rulesetSelect.addEventListener('change', updateMenuVisibility);
   document.getElementById('modeGroup').addEventListener('change', updateMenuVisibility);
   document.getElementById('playersGroup').addEventListener('change', updateMenuVisibility);
 
@@ -980,19 +1504,286 @@
   closeTutorialBtn.addEventListener('click', ()=> closeOverlay('tutorial'));
   helpLinkBtn.addEventListener('click', ()=> openOverlay('tutorial'));
 
+  // ---------- desafío diario ----------
+  function generateDailyLayout(dateStr, size){
+    const rng = hashStringToSeed('quoridor-daily-'+dateStr+'-'+size);
+    const mid = (size-1)/2;
+    const tempState = {
+      size, center:{ r:mid, c:mid },
+      players: [{ r:0, c:mid }],
+      occupied: Array.from({length:size-1}, ()=>Array(size-1).fill(null)),
+      blockedEdges: new Set(),
+      walls: [],
+    };
+    generateRandomWalls(tempState, 4, rng);
+    return tempState.walls.map(w=> ({ r:w.r, c:w.c, orientation:w.orientation }));
+  }
+  function initDailyChallenge(){
+    const dateStr = todayKey();
+    const walls = generateDailyLayout(dateStr, 9);
+    initGame(1, 9, { isDaily:true, dailyWalls: walls });
+    closeOverlay('daily');
+    menuScreen.classList.add('hidden');
+    editorScreen.classList.add('hidden');
+    gameScreen.classList.remove('hidden');
+  }
+  function renderDailyOverlay(){
+    const today = todayKey();
+    const d = statsData.daily;
+    const doneToday = d.lastDate === today;
+    const bestToday = d.bestMoves ? d.bestMoves[today] : null;
+    let html;
+    if(doneToday && bestToday!=null){
+      html = `<div class="big">✅</div><div class="sub">Ya lo resolviste hoy en ${bestToday} movimiento${bestToday===1?'':'s'}.</div>`;
+    } else {
+      html = `<div class="big">🗓️</div><div class="sub">Todavía no lo resolviste hoy. El tablero de hoy es el mismo para todos.</div>`;
+    }
+    html += `<div class="sub" style="margin-top:10px;">Racha actual: ${d.streak||0} día${(d.streak||0)===1?'':'s'} · Mejor racha: ${d.bestStreak||0}</div>`;
+    dailyStatusBody.innerHTML = html;
+    playDailyBtn.textContent = doneToday ? 'Jugar de nuevo' : 'Jugar';
+  }
+  dailyLinkBtn.addEventListener('click', ()=>{ renderDailyOverlay(); openOverlay('daily'); });
+  playDailyBtn.addEventListener('click', initDailyChallenge);
+  closeDailyBtn.addEventListener('click', ()=> closeOverlay('daily'));
+
+  // ---------- recordatorio diario (notificaciones nativas, ver MainActivity.java) ----------
+  function loadReminderPref(){
+    try{ return JSON.parse(localStorage.getItem('quoridor_reminder')||'null') || { enabled:false, time:'19:00' }; }
+    catch(e){ return { enabled:false, time:'19:00' }; }
+  }
+  function saveReminderPref(p){ try{ localStorage.setItem('quoridor_reminder', JSON.stringify(p)); }catch(e){} }
+  let reminderPref = loadReminderPref();
+  function updateReminderUI(){
+    reminderTimeInput.value = reminderPref.time || '19:00';
+    reminderToggleBtn.textContent = reminderPref.enabled ? '🔔 Activado (tocar para apagar)' : 'Activar';
+    const hasBridge = !!(window.AndroidNotifications && window.AndroidNotifications.scheduleDailyReminder);
+    reminderHint.textContent = hasBridge
+      ? 'Te avisa cuando el desafío diario está listo.'
+      : 'Disponible sólo en la app de Android instalada (no en el navegador).';
+    reminderToggleBtn.disabled = !hasBridge;
+    reminderTimeInput.disabled = !hasBridge;
+  }
+  reminderToggleBtn.addEventListener('click', ()=>{
+    const hasBridge = !!(window.AndroidNotifications && window.AndroidNotifications.scheduleDailyReminder);
+    if(!hasBridge) return;
+    if(reminderPref.enabled){
+      window.AndroidNotifications.cancelDailyReminder();
+      reminderPref.enabled = false;
+      saveReminderPref(reminderPref);
+      updateReminderUI();
+    } else {
+      const [h,m] = (reminderTimeInput.value||'19:00').split(':').map(Number);
+      window.AndroidNotifications.scheduleDailyReminder(h, m);
+      // La confirmación final llega por window.QuoridorNotifPermissionResult si hacía falta permiso;
+      // si el permiso ya estaba concedido, damos por hecho que se programó.
+      reminderPref.enabled = true;
+      reminderPref.time = reminderTimeInput.value;
+      saveReminderPref(reminderPref);
+      updateReminderUI();
+    }
+  });
+  reminderTimeInput.addEventListener('change', ()=>{
+    reminderPref.time = reminderTimeInput.value;
+    saveReminderPref(reminderPref);
+    if(reminderPref.enabled && window.AndroidNotifications){
+      const [h,m] = reminderTimeInput.value.split(':').map(Number);
+      window.AndroidNotifications.scheduleDailyReminder(h,m);
+    }
+  });
+  window.QuoridorNotifPermissionResult = function(granted){
+    if(!granted){
+      reminderPref.enabled = false;
+      saveReminderPref(reminderPref);
+      reminderHint.textContent = 'No se pudo activar: falta el permiso de notificaciones de Android.';
+    }
+    updateReminderUI();
+  };
+
+  // ---------- editor de niveles ----------
+  let editorState = null;
+  function editorReset(size){
+    editorState = {
+      size,
+      occupied: Array.from({length:size-1}, ()=>Array(size-1).fill(null)),
+      walls: [],
+    };
+  }
+  function editorCanPlaceWallSlot(r,c,orientation){
+    const size = editorState.size;
+    if(r<0||c<0||r>size-2||c>size-2) return false;
+    if(editorState.occupied[r][c]) return false;
+    if(orientation==='h'){
+      if(c>0 && editorState.occupied[r][c-1]==='h') return false;
+      if(c<size-2 && editorState.occupied[r][c+1]==='h') return false;
+    } else {
+      if(r>0 && editorState.occupied[r-1][c]==='v') return false;
+      if(r<size-2 && editorState.occupied[r+1][c]==='v') return false;
+    }
+    return true;
+  }
+  function editorToggleSlot(r,c,orientation){
+    const existingHere = editorState.occupied[r][c];
+    if(existingHere===orientation){
+      editorState.occupied[r][c] = null;
+      editorState.walls = editorState.walls.filter(w=> !(w.r===r && w.c===c && w.orientation===orientation));
+      editorFeedback.textContent = 'Pared quitada.';
+      renderEditor();
+      return;
+    }
+    if(!editorCanPlaceWallSlot(r,c,orientation)){
+      editorFeedback.textContent = 'Ahí no se puede: se cruza o se pega con otra pared.';
+      return;
+    }
+    editorState.occupied[r][c] = orientation;
+    editorState.walls.push({ r, c, orientation });
+    editorFeedback.textContent = 'Pared agregada. Podés seguir editando.';
+    renderEditor();
+  }
+  function editorValidate(){
+    const size = editorState.size;
+    const mid = (size-1)/2;
+    const blockedSet = new Set();
+    editorState.walls.forEach(w=>{
+      wallEdges(w.r,w.c,w.orientation).forEach(e=> blockedSet.add(edgeKey(e[0],e[1],e[2],e[3])));
+    });
+    const corners = [[0,mid],[size-1,mid],[mid,0],[mid,size-1]];
+    for(const [r,c] of corners){
+      if(!hasPath(r,c,mid,mid,blockedSet,size)) return false;
+    }
+    return true;
+  }
+  function renderEditor(){
+    const size = editorState.size;
+    const cs = BOARD_PX/size;
+    let gridHTML = `<rect x="0" y="0" width="${BOARD_PX}" height="${BOARD_PX}" fill="var(--board)"/>`;
+    for(let r=0;r<size;r++) for(let c=0;c<size;c++){
+      if((r+c)%2===1) gridHTML += `<rect x="${c*cs}" y="${r*cs}" width="${cs}" height="${cs}" fill="var(--board-alt)"/>`;
+    }
+    for(let i=1;i<size;i++){
+      gridHTML += `<line x1="${i*cs}" y1="0" x2="${i*cs}" y2="${BOARD_PX}" stroke="var(--line)" stroke-width="1"/>`;
+      gridHTML += `<line x1="0" y1="${i*cs}" x2="${BOARD_PX}" y2="${i*cs}" stroke="var(--line)" stroke-width="1"/>`;
+    }
+    const mid=(size-1)/2, ccx=(mid+0.5)*cs, ccy=(mid+0.5)*cs;
+    gridHTML += `<circle cx="${ccx}" cy="${ccy}" r="15" fill="none" stroke="var(--accent)" stroke-width="3"/>`;
+    editorGridGroup.innerHTML = gridHTML;
+    let wallsHTML = '';
+    editorState.walls.forEach(w=>{
+      const rect = wallRect(w.r,w.c,w.orientation,cs);
+      const rx = rect.h>rect.w ? rect.w*0.4 : rect.h*0.4;
+      wallsHTML += `<rect x="${rect.x}" y="${rect.y}" width="${rect.w}" height="${rect.h}" rx="${rx}" fill="var(--accent)" stroke="rgba(0,0,0,0.3)" stroke-width="1"/>`;
+    });
+    editorWallsGroup.innerHTML = wallsHTML;
+  }
+  function editorGetSlotFromPoint(x,y){
+    const size = editorState.size;
+    const cs = BOARD_PX/size;
+    const colF = x/cs, rowF = y/cs;
+    const nearestCol = Math.min(Math.max(Math.round(colF),1), size-1);
+    const nearestRow = Math.min(Math.max(Math.round(rowF),1), size-1);
+    const distV = Math.abs(colF-nearestCol)*cs;
+    const distH = Math.abs(rowF-nearestRow)*cs;
+    const orientation = distV < distH ? 'v' : 'h';
+    const r = Math.min(Math.max(nearestRow-1,0), size-2);
+    const c = Math.min(Math.max(nearestCol-1,0), size-2);
+    return { r, c, orientation };
+  }
+  editorBoardSvg.addEventListener('pointerdown', e=>{
+    if(!editorState) return;
+    const pt = editorBoardSvg.createSVGPoint();
+    pt.x = e.clientX; pt.y = e.clientY;
+    const loc = pt.matrixTransform(editorBoardSvg.getScreenCTM().inverse());
+    const slot = editorGetSlotFromPoint(loc.x, loc.y);
+    editorToggleSlot(slot.r, slot.c, slot.orientation);
+  });
+  function loadCustomLevels(){
+    try{ const raw = JSON.parse(localStorage.getItem('quoridor_customLevels')||'[]'); return Array.isArray(raw)?raw:[]; }
+    catch(e){ return []; }
+  }
+  function saveCustomLevels(list){ try{ localStorage.setItem('quoridor_customLevels', JSON.stringify(list)); }catch(e){} }
+  function renderEditorLevelsList(){
+    const list = loadCustomLevels();
+    if(!list.length){ editorLevelsList.innerHTML = '<p class="field-hint">Todavía no guardaste ningún nivel.</p>'; return; }
+    editorLevelsList.innerHTML = list.map((lvl,i)=> `
+      <div class="editor-level-row">
+        <span class="lvl-name">${escapeHtml(lvl.name)} (${lvl.size}×${lvl.size})</span>
+        <button type="button" data-act="load" data-i="${i}">Cargar</button>
+        <button type="button" data-act="play" data-i="${i}">Jugar</button>
+        <button type="button" data-act="del" data-i="${i}">Borrar</button>
+      </div>`).join('');
+  }
+  editorLevelsList.addEventListener('click', e=>{
+    const btn = e.target.closest('button[data-act]');
+    if(!btn) return;
+    const list = loadCustomLevels();
+    const i = +btn.dataset.i;
+    const lvl = list[i];
+    if(!lvl) return;
+    if(btn.dataset.act==='del'){
+      list.splice(i,1); saveCustomLevels(list); renderEditorLevelsList();
+    } else if(btn.dataset.act==='load'){
+      editorSizeSelect.value = String(lvl.size);
+      editorReset(lvl.size);
+      lvl.walls.forEach(w=>{ editorState.occupied[w.r][w.c]=w.orientation; editorState.walls.push(w); });
+      renderEditor();
+      editorFeedback.textContent = `Cargaste "${lvl.name}". Podés seguir editando.`;
+    } else if(btn.dataset.act==='play'){
+      startCustomLevelMatch(lvl);
+    }
+  });
+  function startCustomLevelMatch(lvl){
+    initGame(2, lvl.size, { presetWalls: lvl.walls, isCustomLevel:true, ruleset:'maze' });
+    editorScreen.classList.add('hidden');
+    menuScreen.classList.add('hidden');
+    gameScreen.classList.remove('hidden');
+  }
+  editorSizeSelect.addEventListener('change', ()=>{ editorReset(+editorSizeSelect.value); renderEditor(); });
+  editorClearBtn.addEventListener('click', ()=>{ editorReset(editorState.size); renderEditor(); editorFeedback.textContent='Tablero limpio.'; });
+  editorSaveBtn.addEventListener('click', ()=>{
+    if(!editorState.walls.length){ editorFeedback.textContent='Agregá al menos una pared antes de guardar.'; return; }
+    if(!editorValidate()){ editorFeedback.textContent='Este diseño deja a algún jugador sin camino posible al centro. Ajustalo antes de guardar.'; return; }
+    const name = prompt('¿Cómo se llama este nivel?', 'Mi nivel');
+    if(!name) return;
+    const list = loadCustomLevels();
+    list.push({ name: name.slice(0,24), size: editorState.size, walls: editorState.walls.map(w=>({r:w.r,c:w.c,orientation:w.orientation})) });
+    saveCustomLevels(list);
+    renderEditorLevelsList();
+    editorFeedback.textContent = 'Nivel guardado.';
+  });
+  editorPlayBtn.addEventListener('click', ()=>{
+    if(editorState.walls.length && !editorValidate()){
+      editorFeedback.textContent='Este diseño deja a algún jugador sin camino posible al centro. Ajustalo antes de jugar.';
+      return;
+    }
+    startCustomLevelMatch({ size: editorState.size, walls: editorState.walls });
+  });
+  editorLinkBtn.addEventListener('click', ()=>{
+    editorReset(9);
+    renderEditor();
+    renderEditorLevelsList();
+    menuScreen.classList.add('hidden');
+    editorScreen.classList.remove('hidden');
+  });
+  editorBackBtn.addEventListener('click', ()=>{
+    editorScreen.classList.add('hidden');
+    menuScreen.classList.remove('hidden');
+  });
+
   // ---------- menú & navegación ----------
   function goToMenu(){
     invalidateBotTimer();
+    clearTurnTimer();
     hideWinOverlay();
     gameScreen.classList.add('hidden');
     menuScreen.classList.remove('hidden');
   }
   function doRestart(){
     if(!state) return;
+    if(state.isDaily){ hideWinOverlay(); initDailyChallenge(); return; }
     const cfg = {
       isCpu: !!state.isCpuGame,
       difficulty: (state.players[1] && state.players[1].difficulty) || 'easy',
       names: loadPlayerNames(),
+      ruleset: state.ruleset,
     };
     const playersCount = state.players.length;
     const size = state.size;
@@ -1001,6 +1792,7 @@
   }
 
   startBtn.addEventListener('click', ()=>{
+    const ruleset = currentRuleset();
     const m = currentMode();
     const isCpu = m==='cpu';
     const playersCount = currentPlayersCount();
@@ -1015,9 +1807,9 @@
       if(inp){ names[i] = inp.value.trim(); }
     }
     savePlayerNames(names);
-    saveLastSetup({ playersCount, size, mode:m, difficulty });
+    saveLastSetup({ playersCount, size, mode:m, difficulty, ruleset });
 
-    initGame(playersCount, size, { isCpu, difficulty, names });
+    initGame(playersCount, size, { isCpu, difficulty, names, ruleset });
     menuScreen.classList.add('hidden');
     gameScreen.classList.remove('hidden');
   });
@@ -1045,6 +1837,10 @@
   // ---------- botón físico "atrás" de Android (ver MainActivity.java) ----------
   window.QuoridorHandleBack = function(){
     if(closeTopOverlay()) return;
+    if(!editorScreen.classList.contains('hidden')){
+      editorBackBtn.click();
+      return;
+    }
     if(!gameScreen.classList.contains('hidden') && matchInProgress()){
       showConfirm('¿Salir al menú? Vas a perder el progreso de esta partida.', goToMenu);
       return;
@@ -1057,6 +1853,7 @@
   // ---------- arranque ----------
   applyTheme(loadThemePref());
   updateSettingsSoundBtn();
+  updateReminderUI();
 
   (function restoreLastSetup(){
     const cfg = loadLastSetup();
@@ -1074,6 +1871,9 @@
     }
     if(cfg.size){
       const sr = document.getElementById('s'+cfg.size); if(sr) sr.checked = true;
+    }
+    if(cfg.ruleset && RULESETS[cfg.ruleset]){
+      rulesetSelect.value = cfg.ruleset;
     }
   })();
 
