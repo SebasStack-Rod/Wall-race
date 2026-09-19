@@ -321,3 +321,21 @@
 .campaign-level-main small{ color:var(--ink-soft); font-size:.75rem; }
 .campaign-level-xp{ font-weight:800; font-size:.78rem; white-space:nowrap; }
 .locked-swatch{ opacity:.45; cursor:not-allowed !important; }
+
+/* ---------- FASE 3: EDITOR AVANZADO ---------- */
+.editor-config-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}
+.editor-config-grid fieldset{margin:0;padding:14px;border:1px solid var(--line);border-radius:14px;background:var(--panel-2)}
+.editor-config-grid legend{margin:0 0 8px}
+.editor-inline{display:flex;gap:12px;flex-wrap:wrap;font-size:.82rem;color:var(--ink-soft)}
+.editor-inline label{display:flex;align-items:center;gap:5px}
+.editor-coords,.editor-fields-2,.editor-fields-4{display:grid;gap:8px}
+.editor-coords{grid-template-columns:1fr 1fr;margin-top:9px}
+.editor-fields-2{grid-template-columns:1fr 1fr}
+.editor-fields-4{grid-template-columns:repeat(4,1fr)}
+.editor-coords label,.editor-fields-2 label,.editor-fields-4 label,.editor-difficulty{display:flex;flex-direction:column;gap:5px;font-size:.76rem;font-weight:600;color:var(--ink-soft)}
+.editor-coords input,.editor-fields-4 input{width:100%;padding:9px;border-radius:9px;border:1px solid var(--line);background:var(--panel);color:var(--ink);font:inherit}
+.editor-players{display:flex;flex-direction:column;gap:8px;margin-bottom:12px}
+.editor-player-card{padding:12px;border:1px solid var(--line);border-radius:14px;background:var(--panel)}
+.editor-player-title{margin-bottom:8px}
+.editor-difficulty{margin-top:8px;max-width:220px}
+@media(max-width:720px){.editor-config-grid{grid-template-columns:1fr}.editor-fields-4{grid-template-columns:1fr 1fr}}
