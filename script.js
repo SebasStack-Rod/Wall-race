@@ -1220,7 +1220,7 @@
   function startTurnTimer(){
     clearTurnTimer();
     if(!state || state.winner) return;
-    const seconds=state.turnTimeSeconds>0?state.turnTimeSeconds:(state.ruleset==='blitz'?BLITZ_SECONDS:0);
+    const seconds=state.turnTimeSeconds>0?state.turnTimeSeconds:(state.isCustomLevel?0:(state.ruleset==='blitz'?BLITZ_SECONDS:0));
     if(seconds<=0) return;
     const cp=state.players[state.currentPlayerIndex];
     if(cp&&cp.isCPU) return;
