@@ -375,7 +375,7 @@
     const testSet = new Set(state.blockedEdges);
     for(const e of edges) testSet.add(edgeKey(e[0],e[1],e[2],e[3]));
     for(const p of state.players){
-      if(!hasPath(p.r,p.c,state.center.r,state.center.c,testSet,state.size)) return { valid:false };
+      if(!hasPath(p.r,p.c,state.objective.r,state.objective.c,testSet,state.size)) return { valid:false };
     }
     return { valid:true, edges };
   }
@@ -392,7 +392,7 @@
     base.edges.forEach(e=> testSet.add(edgeKey(e[0],e[1],e[2],e[3])));
     mEdges.forEach(e=> testSet.add(edgeKey(e[0],e[1],e[2],e[3])));
     for(const p of state.players){
-      if(!hasPath(p.r,p.c,state.center.r,state.center.c,testSet,state.size)) return { valid:false };
+      if(!hasPath(p.r,p.c,state.objective.r,state.objective.c,testSet,state.size)) return { valid:false };
     }
     return { valid:true, edges:base.edges, mirrorEdges:mEdges };
   }
@@ -415,7 +415,7 @@
     if(state.ruleset==='hunter'){
       return p.id===0 && p.r===state.center.r && p.c===state.center.c;
     }
-    return p.r===state.center.r && p.c===state.center.c;
+    return p.r===state.objective.r && p.c===state.objective.c;
   }
   function checkHunterTimeout(){
     if(!state || state.ruleset!=='hunter' || state.winner) return;
@@ -1103,7 +1103,7 @@
       recordGameResult({
         winnerSlot: p.id,
         isCpuGame: !!state.isCpuGame,
-        isCpuHard: !!(state.isCpuGame && state.players[1] && (state.players[1].difficulty==='hard' || state.players[1].difficulty==='expert')),
+        isCpuHard:!!(state.isCpuGame&&state.players.some(pl=>pl.isCPU&&(pl.difficulty==='hard'||pl.difficulty==='expert'))),
         ruleset: state.ruleset,
         size: state.size,
         playersCount: state.players.length,
@@ -1219,10 +1219,12 @@
   }
   function startTurnTimer(){
     clearTurnTimer();
-    if(!state || state.ruleset!=='blitz' || state.winner) return;
-    const cp = state.players[state.currentPlayerIndex];
-    if(cp && cp.isCPU) return;
-    state.turnTimeLeft = BLITZ_SECONDS;
+    if(!state || state.winner) return;
+    const seconds=state.turnTimeSeconds>0?state.turnTimeSeconds:(state.ruleset==='blitz'?BLITZ_SECONDS:0);
+    if(seconds<=0) return;
+    const cp=state.players[state.currentPlayerIndex];
+    if(cp&&cp.isCPU) return;
+    state.turnTimeLeft=seconds;
     turnTimerBadge.classList.remove('hidden');
     turnTimerBadge.classList.remove('low');
     turnTimerBadge.textContent = `⏱️ ${state.turnTimeLeft}s`;
@@ -1493,12 +1495,11 @@
     else if(playersCount===3) order=['top','right','bottom'];
     else order=['top','right','bottom','left'];
 
-    const ruleset = options.ruleset || 'classic';
-    const isDaily = !!options.isDaily;
-    const wallsEach = isDaily ? 0 : wallsPerPlayer(size, playersCount);
-    const names = options.names || loadPlayerNames();
-    const isCpu = !!options.isCpu;
-    const difficulty = options.difficulty || 'easy';
+    const ruleset=options.ruleset||'classic', isDaily=!!options.isDaily;
+    const customPlayers=Array.isArray(options.playerConfigs)&&options.playerConfigs.length===playersCount?options.playerConfigs:null;
+    const wallsEach=isDaily?0:wallsPerPlayer(size,playersCount);
+    const names=options.names||loadPlayerNames(),isCpu=!!options.isCpu,difficulty=options.difficulty||'easy';
+    const objective=options.objective&&Number.isInteger(options.objective.r)&&Number.isInteger(options.objective.c)?{r:Math.max(0,Math.min(size-1,options.objective.r)),c:Math.max(0,Math.min(size-1,options.objective.c))}:{r:mid,c:mid};
 
     const players = order.map((slotKey,i)=>{
       const skin = pieceSkins[i] || PALETTE[i];
@@ -1512,12 +1513,12 @@
         name: isCPU ? (options.campaignRival || 'CPU') : ((names[i] && names[i].trim()) ? names[i].trim() : PALETTE[i].name),
         color: skin.color,
         shape: skin.shape,
-        r: slots[slotKey].r,
-        c: slots[slotKey].c,
-        wallsLeft: walls,
-        wallsStart: walls,
-        isCPU: isCPU,
-        difficulty: difficulty,
+        r:customPlayers?Math.max(0,Math.min(size-1,+customPlayers[i].r||0)):slots[slotKey].r,
+        c:customPlayers?Math.max(0,Math.min(size-1,+customPlayers[i].c||0)):slots[slotKey].c,
+        wallsLeft:customPlayers?Math.max(0,+customPlayers[i].walls||0):walls,
+        wallsStart:customPlayers?Math.max(0,+customPlayers[i].walls||0):walls,
+        isCPU:customPlayers?!!customPlayers[i].isCPU:isCPU,
+        difficulty:customPlayers?(customPlayers[i].difficulty||'easy'):difficulty,
         stunned: false,
         hillTurns: 0,
       };
@@ -1525,7 +1526,8 @@
 
     state = {
       size,
-      center: { r:mid, c:mid },
+      center:objective,
+      objective,
       players,
       currentPlayerIndex: 0,
       occupied: Array.from({length:size-1}, ()=>Array(size-1).fill(null)),
@@ -1533,7 +1535,7 @@
       walls: [],
       winner: null,
       validMoves: [],
-      isCpuGame: isCpu,
+      isCpuGame:isCpu||!!(customPlayers&&customPlayers.some(p=>p.isCPU)),
       ruleset,
       moveCount: 0,
       powerUp: null,
@@ -1548,7 +1550,9 @@
       campaignPersonality: options.campaignPersonality || null,
       campaignXPReward: 0,
       presetWalls: Array.isArray(options.presetWalls) ? options.presetWalls : null,
-      isCustomLevel: !!options.isCustomLevel,
+      isCustomLevel:!!options.isCustomLevel,
+      turnTimeSeconds:Math.max(0,+options.turnTimeSeconds||0),
+      playerConfigs:customPlayers?customPlayers.map(p=>Object.assign({},p)):null,
     };
     mode = 'move';
 
@@ -2088,9 +2092,8 @@
       campaign: state.campaign,
       campaignLevel: state.campaignLevel,
       campaignRival: state.campaignRival,
-      campaignPersonality: state.campaignPersonality,
-      presetWalls: state.presetWalls,
-      isCustomLevel: state.isCustomLevel,
+      campaignPersonality:state.campaignPersonality,presetWalls:state.presetWalls,isCustomLevel:state.isCustomLevel,
+      objective:state.objective,turnTimeSeconds:state.turnTimeSeconds,playerConfigs:state.playerConfigs,
     };
     const playersCount = state.players.length;
     const size = state.size;
