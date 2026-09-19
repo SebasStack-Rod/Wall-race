@@ -16,7 +16,13 @@
 
 <div id="menuScreen">
   <div class="menu-card">
-    <h1>Quoridor</h1>
+    <div class="menu-top">
+      <h1>Quoridor</h1>
+      <button type="button" class="coin-chip" id="coinChip" aria-label="Monedas: abrir la tienda">
+        <img src="assets/emotes/icons/cash.png" alt="" class="coin-ico"><span id="coinCount">0</span>
+      </button>
+    </div>
+    <button type="button" class="daily-chip hidden" id="dailyReadyChip">🗓️ ¡Desafío diario listo!</button>
     <p class="subtitle">Movete por el tablero y colocá paredes para bloquear a tus rivales. Gana quien llegue primero al centro.</p>
 
     <fieldset>
@@ -29,12 +35,12 @@
 
     <fieldset id="difficultyFieldset" class="hidden">
       <legend>Dificultad de la IA</legend>
-      <div class="segmented">
-        <input type="radio" name="difficulty" id="diffEasy" value="easy" checked><label for="diffEasy">Fácil</label>
-        <input type="radio" name="difficulty" id="diffNormal" value="normal"><label for="diffNormal">Normal</label>
-        <input type="radio" name="difficulty" id="diffHard" value="hard"><label for="diffHard">Difícil</label>
-        <input type="radio" name="difficulty" id="diffExpert" value="expert"><label for="diffExpert">Experto</label>
+      <div class="segmented" id="difficultyGroup">
+        <input type="radio" name="difficulty" id="diffEasy" value="easy" checked><label for="diffEasy" aria-label="Fácil" title="Fácil"><span class="stars-row"><img src="assets/ui/star.png" alt=""><img src="assets/ui/star-off.png" alt=""><img src="assets/ui/star-off.png" alt=""></span></label>
+        <input type="radio" name="difficulty" id="diffNormal" value="normal"><label for="diffNormal" aria-label="Normal" title="Normal"><span class="stars-row"><img src="assets/ui/star.png" alt=""><img src="assets/ui/star.png" alt=""><img src="assets/ui/star-off.png" alt=""></span></label>
+        <input type="radio" name="difficulty" id="diffHard" value="hard"><label for="diffHard" aria-label="Difícil" title="Difícil"><span class="stars-row"><img src="assets/ui/star.png" alt=""><img src="assets/ui/star.png" alt=""><img src="assets/ui/star.png" alt=""></span></label>
       </div>
+      <p class="field-hint" id="difficultyHint"></p>
     </fieldset>
 
     <fieldset id="playersFieldset">
@@ -62,14 +68,6 @@
       <p class="field-hint" id="rulesetHint"></p>
     </fieldset>
 
-    <fieldset id="customLevelFieldset" class="hidden">
-      <legend>Diseño del laberinto</legend>
-      <select class="select-field" id="customLevelSelect">
-        <option value="random">🎲 Paredes al azar</option>
-      </select>
-      <p class="field-hint">Podés usar un nivel que hayas guardado en el editor. En ese caso se usa el tamaño del nivel.</p>
-    </fieldset>
-
     <fieldset>
       <legend>Tamaño del tablero</legend>
       <div class="segmented" id="sizeGroup">
@@ -81,41 +79,35 @@
     </fieldset>
 
     <fieldset>
-      <legend>Nombres</legend>
+      <legend>Nombres y fichas <span class="legend-sub">(tocá el color para personalizar)</span></legend>
       <div class="names-container" id="namesContainer"></div>
     </fieldset>
 
-    <button id="startBtn">Comenzar partida</button>
+    <button id="startBtn" class="kbtn yellow big block">Comenzar partida</button>
 
-    <div class="menu-links">
-      <button type="button" class="text-link" id="dailyLinkBtn">🗓️ Desafío diario</button>
-      <button type="button" class="text-link" id="achievementsLinkBtn">🏆 Logros</button>
-      <button type="button" class="text-link" id="editorLinkBtn">🧩 Editor de niveles</button>
-      <button type="button" class="text-link" id="settingsLinkBtn">⚙️ Ajustes</button>
-      <button type="button" class="text-link" id="campaignLinkBtn">🏕️ Modo campaña</button>
-      <button type="button" class="text-link" id="skinsLinkBtn">🎨 Personalizar fichas</button>
-      <button type="button" class="text-link" id="statsLinkBtn">📊 Ver estadísticas</button>
-      <button type="button" class="text-link" id="helpLinkBtn">❓ Cómo se juega</button>
+    <div class="menu-grid">
+      <button type="button" class="kbtn sq grey tile" id="dailyLinkBtn"><span class="tile-ico">🗓️</span><span class="tile-label">Diario</span></button>
+      <button type="button" class="kbtn sq grey tile" id="achievementsLinkBtn"><span class="tile-ico">🏆</span><span class="tile-label">Trofeos</span><span class="dot-badge hidden" id="trophyBadge">0</span></button>
+      <button type="button" class="kbtn sq grey tile" id="shopLinkBtn"><span class="tile-ico">🛍️</span><span class="tile-label">Tienda</span><span class="dot-badge hidden" id="shopBadge">0</span></button>
+      <button type="button" class="kbtn sq grey tile" id="settingsLinkBtn"><span class="tile-ico">⚙️</span><span class="tile-label">Ajustes</span></button>
     </div>
+    <button type="button" class="kbtn grey block" id="moreLinkBtn">Más opciones</button>
   </div>
 </div>
 
 <div id="gameScreen" class="hidden">
   <div class="game-header">
-    <div>
-      <h2>Quoridor</h2>
+    <div class="turn-block">
       <div id="turnIndicator"></div>
       <span class="turn-timer hidden" id="turnTimerBadge"></span>
     </div>
-    <div class="header-actions">
-      <button class="ghost-btn" id="settingsBtn" aria-label="Ajustes" title="Ajustes">⚙️</button>
-      <button class="ghost-btn" id="restartBtn">Reiniciar</button>
-      <button class="ghost-btn" id="menuBtn">Menú</button>
-    </div>
+    <button class="kbtn rd blue" id="pauseBtn" aria-label="Pausa" title="Pausa">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><rect x="5" y="4" width="5" height="16" rx="1.5" fill="currentColor"/><rect x="14" y="4" width="5" height="16" rx="1.5" fill="currentColor"/></svg>
+    </button>
   </div>
   <div class="mode-toggle" id="modeToggle">
-    <button type="button" class="mode-btn active" id="moveModeBtn" data-mode="move">🚶 Mover</button>
-    <button type="button" class="mode-btn" id="wallModeBtn" data-mode="wall">🧱 Colocar pared</button>
+    <button type="button" class="kbtn small mode-btn active" id="moveModeBtn" data-mode="move">🚶 Mover</button>
+    <button type="button" class="kbtn small mode-btn" id="wallModeBtn" data-mode="wall">🧱 Colocar pared</button>
   </div>
   <p class="hint-line" id="hintLine">Tocá una casilla resaltada para moverte.</p>
 
@@ -131,6 +123,7 @@
         <g id="movesGroup"></g>
         <g id="wallsGroup"></g>
         <g id="piecesGroup"></g>
+        <g id="emotesGroup" pointer-events="none"></g>
         <rect id="wallPreview" x="0" y="0" width="0" height="0" fill="transparent" opacity="0" pointer-events="none"></rect>
       </svg>
       <p class="board-note">El objetivo es la casilla central marcada con el anillo dorado.</p>
@@ -143,13 +136,32 @@
   </div>
 </div>
 
+<div id="emoteBar" class="emote-bar hidden" role="menu" aria-label="Emotes"></div>
+<div id="starRain" aria-hidden="true"></div>
+
+<!-- ============ OVERLAYS ============ -->
 <div id="winOverlay" class="overlay-backdrop hidden">
   <div class="modal-card accent-border" id="winCard">
     <h2 id="winTitle"></h2>
-    <p>Podés jugar otra ronda con la misma configuración o cambiar los ajustes.</p>
+    <p id="winMsg"></p>
+    <div class="win-stars hidden" id="winStars"></div>
+    <div class="win-rewards" id="winRewards"></div>
+    <div class="win-goal hidden" id="winGoal"></div>
     <div class="modal-actions">
-      <button class="primary-btn" id="playAgainBtn">Jugar de nuevo</button>
-      <button class="secondary-btn" id="changeConfigBtn">Cambiar configuración</button>
+      <button class="kbtn yellow big block" id="playAgainBtn">Jugar de nuevo</button>
+      <button class="kbtn grey block" id="changeConfigBtn">Cambiar configuración</button>
+    </div>
+  </div>
+</div>
+
+<div id="pauseOverlay" class="overlay-backdrop hidden">
+  <div class="modal-card" id="pauseCard">
+    <h2>Pausa</h2>
+    <div class="modal-actions">
+      <button class="kbtn yellow big block" id="resumeBtn">Continuar</button>
+      <button class="kbtn grey block" id="settingsBtn">⚙️ Ajustes</button>
+      <button class="kbtn grey block" id="restartBtn">Reiniciar</button>
+      <button class="kbtn red block" id="menuBtn">Salir al menú</button>
     </div>
   </div>
 </div>
@@ -159,8 +171,19 @@
     <h2>¿Estás seguro?</h2>
     <p id="confirmMessage"></p>
     <div class="modal-actions">
-      <button class="primary-btn" id="confirmYesBtn">Sí, continuar</button>
-      <button class="secondary-btn" id="confirmNoBtn">Cancelar</button>
+      <button class="kbtn red block" id="confirmYesBtn">Sí, continuar</button>
+      <button class="kbtn grey block" id="confirmNoBtn">Cancelar</button>
+    </div>
+  </div>
+</div>
+
+<div id="namePromptOverlay" class="overlay-backdrop hidden">
+  <div class="modal-card" id="namePromptCard">
+    <h2>Nombre del nivel</h2>
+    <input type="text" class="name-input" id="levelNameInput" maxlength="24" placeholder="Mi nivel" aria-label="Nombre del nivel">
+    <div class="modal-actions">
+      <button class="kbtn green block" id="levelNameOkBtn">Guardar</button>
+      <button class="kbtn grey block" id="levelNameCancelBtn">Cancelar</button>
     </div>
   </div>
 </div>
@@ -177,19 +200,36 @@
       </div>
     </div>
     <div class="settings-row">
-      <span>Sonido y vibración</span>
-      <button type="button" class="ghost-btn" id="settingsSoundBtn"></button>
+      <span>Volumen de efectos <b id="sfxVolLabel" class="vol-label"></b></span>
+      <div class="kslider-wrap" id="sfxWrap"><div class="kbar"><i></i></div><input type="range" class="kslider" id="sfxVolume" min="0" max="100" step="5" value="80" aria-label="Volumen de efectos"></div>
     </div>
+    <label class="settings-check"><input type="checkbox" class="kcheck" id="vibrateToggle"><span>Vibración</span></label>
+    <label class="settings-check"><input type="checkbox" class="kcheck" id="showMovesToggle"><span>Mostrar movimientos posibles</span></label>
+    <label class="settings-check"><input type="checkbox" class="kcheck" id="glassToggle"><span>Efecto vidrio en Trofeos</span></label>
+    <p class="field-hint" id="glassHint" style="margin-top:-6px; margin-bottom:16px;">Se ve lindo, pero puede ir a saltos en celulares de gama baja.</p>
     <div class="settings-row">
       <span>Recordatorio diario</span>
       <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
         <input type="time" id="reminderTimeInput" class="name-input" style="width:auto; flex:0 0 auto;" value="19:00">
-        <button type="button" class="ghost-btn" id="reminderToggleBtn">Activar</button>
+        <button type="button" class="kbtn grey small" id="reminderToggleBtn">Activar</button>
       </div>
       <p class="field-hint" id="reminderHint">Te avisa cuando el desafío diario está listo.</p>
     </div>
     <div class="modal-actions">
-      <button class="secondary-btn" id="closeSettingsBtn">Cerrar</button>
+      <button class="kbtn yellow block" id="closeSettingsBtn">Cerrar</button>
+    </div>
+  </div>
+</div>
+
+<div id="moreOverlay" class="overlay-backdrop hidden">
+  <div class="modal-card" id="moreCard">
+    <h2>Más opciones</h2>
+    <div class="modal-actions">
+      <button type="button" class="kbtn grey block" id="editorLinkBtn">🧩 Editor de niveles</button>
+      <button type="button" class="kbtn grey block" id="skinsLinkBtn">🎨 Personalizar fichas</button>
+      <button type="button" class="kbtn grey block" id="statsLinkBtn">📊 Ver estadísticas</button>
+      <button type="button" class="kbtn grey block" id="helpLinkBtn">❓ Cómo se juega</button>
+      <button type="button" class="kbtn yellow block" id="closeMoreBtn">Cerrar</button>
     </div>
   </div>
 </div>
@@ -202,10 +242,11 @@
       <div class="tutorial-step"><span class="emoji">🚶</span><p><strong>Mover:</strong> con el modo "Mover" activo, tocá una de las casillas resaltadas para desplazar tu ficha ahí.</p></div>
       <div class="tutorial-step"><span class="emoji">🧱</span><p><strong>Pared:</strong> activá "Colocar pared", arrastrá el dedo sobre el tablero para elegir dónde ubicarla y soltá para confirmar. Ninguna pared puede dejar a un jugador sin camino posible al centro.</p></div>
       <div class="tutorial-step"><span class="emoji">🔁</span><p><strong>Turnos:</strong> cada jugador tiene una cantidad limitada de paredes. Cuando se acaban, solo se puede mover.</p></div>
+      <div class="tutorial-step"><span class="emoji">🪙</span><p><strong>Monedas:</strong> ganale a la IA o resolvé el desafío diario para juntar monedas, y usalas en la tienda para conseguir emotes y globos.</p></div>
     </div>
-    <p style="text-align:center; font-size:0.82rem; color:var(--ink-soft);">Podés volver a ver esta ayuda tocando "❓ Cómo se juega" en el menú.</p>
+    <p style="text-align:center; font-size:0.82rem; color:var(--ink-soft);">Podés volver a ver esta ayuda desde "Más opciones".</p>
     <div class="modal-actions">
-      <button class="primary-btn" id="closeTutorialBtn">¡Entendido, a jugar!</button>
+      <button class="kbtn yellow block" id="closeTutorialBtn">¡Entendido, a jugar!</button>
     </div>
   </div>
 </div>
@@ -215,8 +256,8 @@
     <h2>Estadísticas</h2>
     <div id="statsBody"></div>
     <div class="modal-actions">
-      <button class="secondary-btn" id="resetStatsBtn">Reiniciar estadísticas</button>
-      <button class="primary-btn" id="closeStatsBtn">Cerrar</button>
+      <button class="kbtn red block" id="resetStatsBtn">Reiniciar estadísticas</button>
+      <button class="kbtn yellow block" id="closeStatsBtn">Cerrar</button>
     </div>
   </div>
 </div>
@@ -226,19 +267,38 @@
     <h2>Personalizar fichas</h2>
     <div id="skinsBody"></div>
     <div class="modal-actions">
-      <button class="secondary-btn" id="resetSkinsBtn">Restablecer</button>
-      <button class="primary-btn" id="closeSkinsBtn">Cerrar</button>
+      <button class="kbtn grey block" id="resetSkinsBtn">Restablecer</button>
+      <button class="kbtn yellow block" id="closeSkinsBtn">Cerrar</button>
     </div>
   </div>
 </div>
 
 <div id="achievementsOverlay" class="overlay-backdrop hidden">
-  <div class="modal-card wide" id="achievementsCard">
-    <h2>Logros</h2>
+  <div class="modal-card wide trophy-card" id="achievementsCard">
+    <h2>Trofeos</h2>
     <p class="ach-summary" id="achSummary"></p>
+    <div class="cat-chips" id="achCats"></div>
     <div class="ach-grid" id="achGrid"></div>
     <div class="modal-actions">
-      <button class="primary-btn" id="closeAchievementsBtn">Cerrar</button>
+      <button class="kbtn green block hidden" id="claimAllBtn">Reclamar todo</button>
+      <button class="kbtn yellow block" id="closeAchievementsBtn">Cerrar</button>
+    </div>
+  </div>
+</div>
+
+<div id="shopOverlay" class="overlay-backdrop hidden">
+  <div class="modal-card wide shop-card" id="shopCard">
+    <div class="shop-head">
+      <h2>Tienda</h2>
+      <span class="coin-chip static"><img src="assets/emotes/icons/cash.png" alt="" class="coin-ico"><span id="shopCoins">0</span></span>
+    </div>
+    <p class="swatch-label" style="text-align:left; margin-top:6px;">Tus emotes en partida · tocá un espacio y después un emote tuyo</p>
+    <div class="shop-slots" id="shopSlots"></div>
+    <div class="shop-tabs" id="shopTabs"></div>
+    <div class="shop-grid" id="shopGrid"></div>
+    <div class="shop-detail" id="shopDetail"></div>
+    <div class="modal-actions">
+      <button class="kbtn yellow block" id="closeShopBtn">Cerrar</button>
     </div>
   </div>
 </div>
@@ -248,20 +308,8 @@
     <h2>Desafío diario</h2>
     <div class="daily-status" id="dailyStatusBody"></div>
     <div class="modal-actions">
-      <button class="primary-btn" id="playDailyBtn">Jugar</button>
-      <button class="secondary-btn" id="closeDailyBtn">Cerrar</button>
-    </div>
-  </div>
-</div>
-
-<div id="levelNameOverlay" class="overlay-backdrop hidden">
-  <div class="modal-card" id="levelNameCard">
-    <h2>Guardar nivel</h2>
-    <p>¿Cómo se llama este nivel?</p>
-    <input type="text" class="name-input" id="levelNameInput" maxlength="24" value="Mi nivel" aria-label="Nombre del nivel">
-    <div class="modal-actions">
-      <button class="primary-btn" id="levelNameSaveBtn">Guardar</button>
-      <button class="secondary-btn" id="levelNameCancelBtn">Cancelar</button>
+      <button class="kbtn yellow block" id="playDailyBtn">Jugar</button>
+      <button class="kbtn grey block" id="closeDailyBtn">Cerrar</button>
     </div>
   </div>
 </div>
@@ -272,7 +320,7 @@
   <div class="game-header">
     <div><h2>Editor de niveles</h2></div>
     <div class="header-actions">
-      <button class="ghost-btn" id="editorBackBtn">← Menú</button>
+      <button class="kbtn grey small" id="editorBackBtn">← Menú</button>
     </div>
   </div>
   <p class="hint-line">Tocá entre dos casillas para poner o sacar una pared. Al guardar o jugar se valida que el diseño no deje a nadie sin camino posible.</p>
@@ -283,32 +331,10 @@
       <option value="9" selected>9×9</option>
       <option value="11">11×11</option>
     </select>
-    <button type="button" class="ghost-btn" id="editorClearBtn">🗑️ Limpiar</button>
-    <button type="button" class="ghost-btn" id="editorSaveBtn">💾 Guardar</button>
-    <button type="button" class="ghost-btn" id="editorPlayBtn">▶️ Jugar este diseño</button>
+    <button type="button" class="kbtn grey small" id="editorClearBtn">🗑️ Limpiar</button>
+    <button type="button" class="kbtn green small" id="editorSaveBtn">💾 Guardar</button>
+    <button type="button" class="kbtn yellow small" id="editorPlayBtn">▶️ Jugar este diseño</button>
   </div>
-  <div class="editor-config-grid">
-    <fieldset><legend>Objetivo</legend>
-      <div class="editor-inline">
-        <label><input type="radio" name="editorObjective" value="center" checked> Centro</label>
-        <label><input type="radio" name="editorObjective" value="custom"> Casilla personalizada</label>
-      </div>
-      <div class="editor-coords hidden" id="editorObjectiveCoords">
-        <label>Fila <input type="number" id="editorObjectiveRow" min="1" value="5"></label>
-        <label>Columna <input type="number" id="editorObjectiveCol" min="1" value="5"></label>
-      </div>
-    </fieldset>
-    <fieldset><legend>Partida</legend>
-      <div class="editor-fields-2">
-        <label>Jugadores<select class="select-field" id="editorPlayersCount"><option value="2" selected>2</option><option value="3">3</option><option value="4">4</option></select></label>
-        <label>Tiempo por turno<select class="select-field" id="editorTurnTime"><option value="0">Sin límite</option><option value="10">10 s</option><option value="15">15 s</option><option value="20">20 s</option><option value="30">30 s</option><option value="60">60 s</option></select></label>
-      </div>
-      <label>Reglas<select class="select-field" id="editorRuleset">
-        <option value="classic">🎯 Clásico</option><option value="fog">🌫️ Niebla</option><option value="teams">🤝 2v2</option><option value="party">🎉 Fiesta</option><option value="blitz">⏱️ Contrarreloj</option><option value="mirror">🪞 Espejo</option><option value="hill">⛰️ Rey de la colina</option><option value="hunter">🏹 Cazador y fugitivo</option>
-      </select></label>
-    </fieldset>
-  </div>
-  <div class="editor-players" id="editorPlayersConfig"></div>
   <div class="game-layout">
     <div class="board-wrap">
       <svg id="editorBoardSvg" viewBox="0 0 630 630" xmlns="http://www.w3.org/2000/svg">
@@ -320,7 +346,7 @@
     <aside class="side-panel">
       <h3>Niveles guardados</h3>
       <div class="editor-list" id="editorLevelsList"></div>
-      <p class="editor-note">Un nivel guardado se puede elegir como "Laberinto" al empezar una partida nueva.</p>
+      <p class="editor-note">Un nivel guardado se puede jugar desde esta lista.</p>
     </aside>
   </div>
 </div>

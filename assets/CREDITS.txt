@@ -1,0 +1,4 @@
+Assets de Kenney (kenney.nl), licencia CC0 1.0:
+- UI Pack (botones, sliders, checks, estrellas, sonidos, fuente Kenney Future Narrow)
+- Emote Pack (íconos y globos, rasterizados a 4x desde el SVG)
+- Medals (medallas, rasterizadas a 4x desde el SVG)
