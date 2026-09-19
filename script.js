@@ -232,6 +232,13 @@
   const levelNameInput = document.getElementById('levelNameInput');
   const levelNameSaveBtn = document.getElementById('levelNameSaveBtn');
   const levelNameCancelBtn = document.getElementById('levelNameCancelBtn');
+  const editorPlayersCount = document.getElementById('editorPlayersCount');
+  const editorTurnTime = document.getElementById('editorTurnTime');
+  const editorRuleset = document.getElementById('editorRuleset');
+  const editorPlayersConfig = document.getElementById('editorPlayersConfig');
+  const editorObjectiveCoords = document.getElementById('editorObjectiveCoords');
+  const editorObjectiveRow = document.getElementById('editorObjectiveRow');
+  const editorObjectiveCol = document.getElementById('editorObjectiveCol');
 
   const overlayEls = { win:winOverlay, confirm:confirmOverlay, settings:settingsOverlay, tutorial:tutorialOverlay, stats:statsOverlay, skins:skinsOverlay, achievements:achievementsOverlay, daily:dailyOverlay, levelName:levelNameOverlay };
 
@@ -1806,13 +1813,86 @@
 
   // ---------- editor de niveles ----------
   let editorState = null;
-  function editorReset(size){
-    editorState = {
-      size,
-      occupied: Array.from({length:size-1}, ()=>Array(size-1).fill(null)),
-      walls: [],
-    };
+  function defaultEditorPlayers(size,count){
+    const mid=(size-1)/2;
+    const slots=[{r:0,c:mid},{r:size-1,c:mid},{r:mid,c:0},{r:mid,c:size-1}];
+    return slots.slice(0,count).map(p=>({r:p.r,c:p.c,walls:wallsPerPlayer(size,count),isCPU:false,difficulty:'easy'}));
   }
+  function editorPlayerConfigHTML(){
+    let html='';
+    editorState.players.forEach((p,i)=>{
+      html += '<div class="editor-player-card"><div class="editor-player-title"><strong>Jugador '+(i+1)+'</strong></div>';
+      html += '<div class="editor-fields-4">';
+      html += '<label>Fila <input type="number" min="1" max="'+editorState.size+'" data-player="'+i+'" data-field="r" value="'+(p.r+1)+'"></label>';
+      html += '<label>Col. <input type="number" min="1" max="'+editorState.size+'" data-player="'+i+'" data-field="c" value="'+(p.c+1)+'"></label>';
+      html += '<label>Paredes <input type="number" min="0" max="50" data-player="'+i+'" data-field="walls" value="'+p.walls+'"></label>';
+      html += '<label>Control<select class="select-field" data-player="'+i+'" data-field="control"><option value="local" '+(!p.isCPU?'selected':'')+'>👤 Local</option><option value="cpu" '+(p.isCPU?'selected':'')+'>🤖 IA</option></select></label></div>';
+      html += '<label class="editor-difficulty '+(p.isCPU?'':'hidden')+'">Dificultad IA<select class="select-field" data-player="'+i+'" data-field="difficulty">';
+      html += '<option value="easy" '+(p.difficulty==='easy'?'selected':'')+'>Fácil</option><option value="normal" '+(p.difficulty==='normal'?'selected':'')+'>Normal</option><option value="hard" '+(p.difficulty==='hard'?'selected':'')+'>Difícil</option><option value="expert" '+(p.difficulty==='expert'?'selected':'')+'>Experto</option></select></label></div>';
+    });
+    return html;
+  }
+  function syncEditorControls(){
+    if(!editorState) return;
+    editorPlayersCount.value=String(editorState.players.length);
+    editorTurnTime.value=String(editorState.turnTime||0);
+    editorRuleset.value=editorState.ruleset||'classic';
+    document.querySelectorAll('input[name="editorObjective"]').forEach(r=>r.checked=r.value===editorState.objective.mode);
+    editorObjectiveRow.value=String(editorState.objective.r+1);
+    editorObjectiveCol.value=String(editorState.objective.c+1);
+    editorObjectiveCoords.classList.toggle('hidden',editorState.objective.mode!=='custom');
+    editorPlayersConfig.innerHTML=editorPlayerConfigHTML();
+    renderEditor();
+  }
+  function editorReset(size){
+    const count=editorState&&editorState.players ? editorState.players.length : 2;
+    editorState={
+      size,
+      objective:{r:Math.floor((size-1)/2),c:Math.floor((size-1)/2),mode:'center'},
+      players:defaultEditorPlayers(size,count),
+      turnTime:0,ruleset:'classic',
+      occupied:Array.from({length:size-1},()=>Array(size-1).fill(null)),
+      walls:[]
+    };
+    syncEditorControls();
+  }
+  function editorApplyObjective(){
+    const modeValue=document.querySelector('input[name="editorObjective"]:checked')?.value||'center';
+    editorState.objective.mode=modeValue;
+    if(modeValue==='center'){
+      editorState.objective.r=Math.floor((editorState.size-1)/2);
+      editorState.objective.c=Math.floor((editorState.size-1)/2);
+    }else{
+      editorState.objective.r=Math.max(0,Math.min(editorState.size-1,(+editorObjectiveRow.value||1)-1));
+      editorState.objective.c=Math.max(0,Math.min(editorState.size-1,(+editorObjectiveCol.value||1)-1));
+    }
+    syncEditorControls();
+  }
+  editorPlayersCount.addEventListener('change',()=>{
+    const count=Math.max(2,Math.min(4,+editorPlayersCount.value||2));
+    const old=editorState.players||[], next=defaultEditorPlayers(editorState.size,count);
+    next.forEach((p,i)=>{if(old[i]) Object.assign(p,old[i]); p.r=Math.max(0,Math.min(editorState.size-1,+p.r||0)); p.c=Math.max(0,Math.min(editorState.size-1,+p.c||0));});
+    editorState.players=next; syncEditorControls();
+  });
+  editorTurnTime.addEventListener('change',()=>editorState.turnTime=+editorTurnTime.value||0);
+  editorRuleset.addEventListener('change',()=>editorState.ruleset=editorRuleset.value);
+  document.querySelectorAll('input[name="editorObjective"]').forEach(r=>r.addEventListener('change',editorApplyObjective));
+  editorObjectiveRow.addEventListener('change',editorApplyObjective);
+  editorObjectiveCol.addEventListener('change',editorApplyObjective);
+  editorPlayersConfig.addEventListener('change',e=>{
+    const el=e.target.closest('[data-player]'); if(!el) return;
+    const p=editorState.players[+el.dataset.player]; if(!p) return;
+    if(el.dataset.field==='control'){p.isCPU=el.value==='cpu';syncEditorControls();}
+    if(el.dataset.field==='difficulty') p.difficulty=el.value;
+  });
+  editorPlayersConfig.addEventListener('input',e=>{
+    const el=e.target.closest('[data-player]'); if(!el) return;
+    const p=editorState.players[+el.dataset.player]; if(!p) return;
+    const v=+el.value;
+    if(el.dataset.field==='r') p.r=Math.max(0,Math.min(editorState.size-1,(v||1)-1));
+    if(el.dataset.field==='c') p.c=Math.max(0,Math.min(editorState.size-1,(v||1)-1));
+    if(el.dataset.field==='walls') p.walls=Math.max(0,Math.min(50,v||0));
+  });
   function editorCanPlaceWallSlot(r,c,orientation){
     const size = editorState.size;
     if(r<0||c<0||r>size-2||c>size-2) return false;
@@ -1845,16 +1925,16 @@
     renderEditor();
   }
   function editorValidate(){
-    const size = editorState.size;
-    const mid = (size-1)/2;
-    const blockedSet = new Set();
-    editorState.walls.forEach(w=>{
-      wallEdges(w.r,w.c,w.orientation).forEach(e=> blockedSet.add(edgeKey(e[0],e[1],e[2],e[3])));
-    });
-    const corners = [[0,mid],[size-1,mid],[mid,0],[mid,size-1]];
-    for(const [r,c] of corners){
-      if(!hasPath(r,c,mid,mid,blockedSet,size)) return false;
+    const size=editorState.size,obj=editorState.objective,seen=new Set();
+    for(const p of editorState.players){
+      if(p.r<0||p.c<0||p.r>=size||p.c>=size) return false;
+      const key=p.r+','+p.c; if(seen.has(key)) return false; seen.add(key);
     }
+    if(obj.r<0||obj.c<0||obj.r>=size||obj.c>=size) return false;
+    const blockedSet=new Set();
+    editorState.walls.forEach(w=>wallEdges(w.r,w.c,w.orientation).forEach(e=>blockedSet.add(edgeKey(e[0],e[1],e[2],e[3])));
+    for(const p of editorState.players) if(!hasPath(p.r,p.c,obj.r,obj.c,blockedSet,size)) return false;
+    if(editorState.ruleset==='teams'&&editorState.players.length!==4) return false;
     return true;
   }
   function renderEditor(){
@@ -1868,8 +1948,13 @@
       gridHTML += `<line x1="${i*cs}" y1="0" x2="${i*cs}" y2="${BOARD_PX}" stroke="var(--line)" stroke-width="1"/>`;
       gridHTML += `<line x1="0" y1="${i*cs}" x2="${BOARD_PX}" y2="${i*cs}" stroke="var(--line)" stroke-width="1"/>`;
     }
-    const mid=(size-1)/2, ccx=(mid+0.5)*cs, ccy=(mid+0.5)*cs;
+    const obj=editorState.objective;
+    const ccx=(obj.c+0.5)*cs, ccy=(obj.r+0.5)*cs;
     gridHTML += `<circle cx="${ccx}" cy="${ccy}" r="15" fill="none" stroke="var(--accent)" stroke-width="3"/>`;
+    editorState.players.forEach((p,i)=>{
+      const px=(p.c+0.5)*cs,py=(p.r+0.5)*cs,color=PALETTE[i].color;
+      gridHTML += `<circle cx="${px}" cy="${py}" r="${cs*0.28}" fill="${color}" opacity=".9" stroke="var(--panel)" stroke-width="2"/><text x="${px}" y="${py+4}" text-anchor="middle" font-size="${cs*.24}" font-weight="700" fill="white">${i+1}</text>`;
+    });
     editorGridGroup.innerHTML = gridHTML;
     let wallsHTML = '';
     editorState.walls.forEach(w=>{
@@ -1926,26 +2011,28 @@
     if(btn.dataset.act==='del'){
       list.splice(i,1); saveCustomLevels(list); renderEditorLevelsList();
     } else if(btn.dataset.act==='load'){
-      editorSizeSelect.value = String(lvl.size);
+      editorSizeSelect.value=String(lvl.size);
       editorReset(lvl.size);
-      lvl.walls.forEach(w=>{ editorState.occupied[w.r][w.c]=w.orientation; editorState.walls.push(w); });
-      renderEditor();
-      editorFeedback.textContent = `Cargaste "${lvl.name}". Podés seguir editando.`;
+      editorState.objective=lvl.objective||editorState.objective;
+      editorState.turnTime=+lvl.turnTime||0;
+      editorState.ruleset=lvl.ruleset||'classic';
+      if(Array.isArray(lvl.players)&&lvl.players.length>=2) editorState.players=lvl.players.slice(0,4);
+      lvl.walls.forEach(w=>{editorState.occupied[w.r][w.c]=w.orientation;editorState.walls.push(Object.assign({},w));});
+      syncEditorControls();
+      editorFeedback.textContent=`Cargaste "${lvl.name}". Podés seguir editando.`;
     } else if(btn.dataset.act==='play'){
       startCustomLevelMatch(lvl);
     }
   });
   function startCustomLevelMatch(lvl){
-    initGame(2, lvl.size, { presetWalls: lvl.walls, isCustomLevel:true, ruleset:'maze' });
-    editorScreen.classList.add('hidden');
-    menuScreen.classList.add('hidden');
-    gameScreen.classList.remove('hidden');
+    const count=Array.isArray(lvl.players)?lvl.players.length:2;
+    initGame(count,lvl.size,{presetWalls:lvl.walls||[],isCustomLevel:true,ruleset:lvl.ruleset||'classic',objective:lvl.objective,turnTimeSeconds:+lvl.turnTime||0,playerConfigs:lvl.players});
+    editorScreen.classList.add('hidden');menuScreen.classList.add('hidden');gameScreen.classList.remove('hidden');
   }
-  editorSizeSelect.addEventListener('change', ()=>{ editorReset(+editorSizeSelect.value); renderEditor(); });
-  editorClearBtn.addEventListener('click', ()=>{ editorReset(editorState.size); renderEditor(); editorFeedback.textContent='Tablero limpio.'; });
+  editorSizeSelect.addEventListener('change', ()=>{editorReset(+editorSizeSelect.value);syncEditorControls();});
+  editorClearBtn.addEventListener('click', ()=>{editorReset(editorState.size);syncEditorControls();editorFeedback.textContent='Tablero limpio.';});
   editorSaveBtn.addEventListener('click', ()=>{
-    if(!editorState.walls.length){ editorFeedback.textContent='Agregá al menos una pared antes de guardar.'; return; }
-    if(!editorValidate()){ editorFeedback.textContent='Este diseño deja a algún jugador sin camino posible al centro. Ajustalo antes de guardar.'; return; }
+    if(!editorValidate()){ editorFeedback.textContent='El diseño no es válido: revisá las posiciones, el objetivo o los caminos posibles.'; return; }
     levelNameInput.value = 'Mi nivel';
     openOverlay('levelName');
     setTimeout(()=>{ try{ levelNameInput.focus(); levelNameInput.select(); }catch(e){} }, 50);
@@ -1953,7 +2040,7 @@
   function confirmSaveLevel(){
     const name = (levelNameInput.value || '').trim() || 'Mi nivel';
     const list = loadCustomLevels();
-    list.push({ name: name.slice(0,24), size: editorState.size, walls: editorState.walls.map(w=>({r:w.r,c:w.c,orientation:w.orientation})) });
+    list.push({name:name.slice(0,24),size:editorState.size,objective:Object.assign({},editorState.objective),turnTime:editorState.turnTime||0,ruleset:editorState.ruleset||'classic',players:editorState.players.map(p=>({r:p.r,c:p.c,walls:p.walls,isCPU:!!p.isCPU,difficulty:p.difficulty||'easy'})),walls:editorState.walls.map(w=>({r:w.r,c:w.c,orientation:w.orientation}))});
     saveCustomLevels(list);
     renderEditorLevelsList();
     editorFeedback.textContent = 'Nivel guardado.';
@@ -1971,7 +2058,7 @@
   });
   editorLinkBtn.addEventListener('click', ()=>{
     editorReset(9);
-    renderEditor();
+    syncEditorControls();
     renderEditorLevelsList();
     menuScreen.classList.add('hidden');
     editorScreen.classList.remove('hidden');
