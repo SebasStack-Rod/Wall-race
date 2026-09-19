@@ -48,7 +48,7 @@
     { name:'Estratega', min:750 }, { name:'Maestro', min:1200 }, { name:'Leyenda', min:1800 }
   ];
   const CAMPAIGN_SKIN_UNLOCKS = { 4:{color:'#8e5fb0'}, 6:{color:'#2f9e97'}, 8:{color:'#c25b9c'}, 10:{color:'#6b7280'} };
-  const CAMPAIGN_SHAPE_UNLOCKS = { 3:'star', 5:'hex', 7:'diamond', 9:'triangle' };
+  const CAMPAIGN_SHAPE_UNLOCKS = { 3:'star', 5:'hex' };
   function blankCampaign(){ return { xp:0, unlockedLevel:1, completed:[], wins:0, losses:0 }; }
   function loadCampaign(){
     const base=blankCampaign();
@@ -68,6 +68,7 @@
     return !Object.values(CAMPAIGN_SKIN_UNLOCKS).includes(color);
   }
   function campaignShapeUnlocked(shape){
+    if(PALETTE.some(p=> p.shape===shape)) return true;
     for(const [lvl,sh] of Object.entries(CAMPAIGN_SHAPE_UNLOCKS)){ if(sh===shape && campaignData.completed.includes(+lvl)) return true; }
     return !Object.values(CAMPAIGN_SHAPE_UNLOCKS).includes(shape);
   }
@@ -207,6 +208,8 @@
 
   const rulesetSelect = document.getElementById('rulesetSelect');
   const rulesetHint = document.getElementById('rulesetHint');
+  const customLevelFieldset = document.getElementById('customLevelFieldset');
+  const customLevelSelect = document.getElementById('customLevelSelect');
   const turnTimerBadge = document.getElementById('turnTimerBadge');
 
   const reminderTimeInput = document.getElementById('reminderTimeInput');
@@ -225,8 +228,12 @@
   const editorWallsGroup = document.getElementById('editorWallsGroup');
   const editorFeedback = document.getElementById('editorFeedback');
   const editorLevelsList = document.getElementById('editorLevelsList');
+  const levelNameOverlay = document.getElementById('levelNameOverlay');
+  const levelNameInput = document.getElementById('levelNameInput');
+  const levelNameSaveBtn = document.getElementById('levelNameSaveBtn');
+  const levelNameCancelBtn = document.getElementById('levelNameCancelBtn');
 
-  const overlayEls = { win:winOverlay, confirm:confirmOverlay, settings:settingsOverlay, tutorial:tutorialOverlay, stats:statsOverlay, skins:skinsOverlay, achievements:achievementsOverlay, daily:dailyOverlay };
+  const overlayEls = { win:winOverlay, confirm:confirmOverlay, settings:settingsOverlay, tutorial:tutorialOverlay, stats:statsOverlay, skins:skinsOverlay, achievements:achievementsOverlay, daily:dailyOverlay, levelName:levelNameOverlay };
 
   let state = null;
   let mode = 'move'; // 'move' | 'wall'
@@ -523,15 +530,19 @@
   }
 
   function advanceTurn(){
+    const n = state.players.length;
     let next = state.currentPlayerIndex;
-    for(let i=0;i<state.players.length;i++){
-      next = (next+1) % state.players.length;
-      if(state.players[next].stunned){ state.players[next].stunned = false; continue; }
+    for(let i=0;i<n;i++){
+      next = (next+1) % n;
+      const cand = state.players[next];
+      if(cand.stunned){ cand.stunned = false; continue; }
+      if(n>1 && cand.wallsLeft<=0 && computeValidMoves(next).length===0) continue;
       break;
     }
     state.currentPlayerIndex = next;
-    state.validMoves = computeValidMoves(state.currentPlayerIndex);
-    mode = 'move';
+    state.validMoves = computeValidMoves(next);
+    const cpNext = state.players[next];
+    mode = (!state.validMoves.length && cpNext.wallsLeft>0 && !cpNext.isCPU) ? 'wall' : 'move';
   }
 
   // ---------- overlays genéricos ----------
@@ -553,6 +564,7 @@
     if(overlayStack.length===0 && !gameScreen.classList.contains('hidden') && state && !state.winner){
       scheduleBotTurnIfNeeded();
       startTurnTimer();
+      updateHunterBadge();
     }
   }
   function closeTopOverlay(){
@@ -778,7 +790,7 @@
     if(!toastQueue.length){ toastShowing=false; return; }
     toastShowing = true;
     const a = toastQueue.shift();
-    achievementToast.textContent = `🏆 Nuevo logro: ${a.name}`;
+    achievementToast.textContent = a.text || `🏆 Nuevo logro: ${a.name}`;
     achievementToast.classList.add('show');
     setTimeout(()=>{
       achievementToast.classList.remove('show');
@@ -823,7 +835,9 @@
   }
   resetStatsBtn.addEventListener('click', ()=>{
     showConfirm('¿Reiniciar todas las estadísticas guardadas? No se puede deshacer.', ()=>{
-      statsData = { totalGames:0, winsBySlot:[0,0,0,0], streak:{slot:null,count:0}, vsCpu:{played:0,won:0} };
+      const keepAchievements = statsData.achievementsUnlocked.slice();
+      statsData = blankStats();
+      statsData.achievementsUnlocked = keepAchievements;
       saveStats();
       renderStatsOverlay();
     });
@@ -874,11 +888,11 @@
     const previewHtml = smallShapeSVG(current.shape, current.color, 64);
     const colorsHtml = SKIN_COLORS.map(c=>{
       const sel = c===current.color ? 'selected' : ''; const locked=!campaignSkinColorUnlocked(c);
-      return `<button type="button" class="color-swatch ${sel} ${locked?'locked-swatch':''}" data-color="${c}" ${locked?'disabled':''} style="background:${c}" aria-label="${locked?'Bloqueado':'Color '+c}">${locked?'🔒':''}</button>`;
+      return `<button type="button" class="color-swatch ${sel} ${locked?'locked-swatch':''}" data-color="${c}" style="background:${c}" aria-label="${locked?'Bloqueado':'Color '+c}">${locked?'🔒':''}</button>`;
     }).join('');
     const shapesHtml = SKIN_SHAPES.map(sh=>{
       const sel = sh===current.shape ? 'selected' : ''; const locked=!campaignShapeUnlocked(sh);
-      return `<button type="button" class="shape-swatch ${sel} ${locked?'locked-swatch':''}" data-shape="${sh}" ${locked?'disabled':''} aria-label="${locked?'Bloqueado':SHAPE_LABEL[sh]}">${locked?'🔒':smallShapeSVG(sh,'var(--ink)',22)}</button>`;
+      return `<button type="button" class="shape-swatch ${sel} ${locked?'locked-swatch':''}" data-shape="${sh}" aria-label="${locked?'Bloqueado':SHAPE_LABEL[sh]}">${locked?'🔒':smallShapeSVG(sh,'var(--ink)',22)}</button>`;
     }).join('');
     skinsBody.innerHTML = `
       <div class="slot-tabs">${tabsHtml}</div>
@@ -890,7 +904,7 @@
     `;
   }
   function setSkinColor(slot, color){
-    if(!campaignSkinColorUnlocked(color)){ showAchievementToasts([{icon:'🔒',name:'Color bloqueado',desc:'Completá la etapa correspondiente de la campaña.'}]); return; }
+    if(!campaignSkinColorUnlocked(color)){ showAchievementToasts([{text:'🔒 Color bloqueado: completá la etapa correspondiente de la campaña.'}]); return; }
     const currentColorOfSlot = pieceSkins[slot].color;
     const otherIdx = pieceSkins.findIndex((s,i)=> i!==slot && s.color===color);
     pieceSkins[slot].color = color;
@@ -907,7 +921,7 @@
     const colorBtn = e.target.closest('.color-swatch');
     if(colorBtn){ setSkinColor(activeSkinSlot, colorBtn.dataset.color); return; }
     const shapeBtn = e.target.closest('.shape-swatch');
-    if(shapeBtn){ if(!campaignShapeUnlocked(shapeBtn.dataset.shape)){ showAchievementToasts([{icon:'🔒',name:'Forma bloqueada',desc:'Avanzá en la campaña para desbloquearla.'}]); return; } pieceSkins[activeSkinSlot].shape = shapeBtn.dataset.shape; saveSkins(); recordSkinCustomized(); renderSkinsOverlay(); return; }
+    if(shapeBtn){ if(!campaignShapeUnlocked(shapeBtn.dataset.shape)){ showAchievementToasts([{text:'🔒 Forma bloqueada: avanzá en la campaña para desbloquearla.'}]); return; } pieceSkins[activeSkinSlot].shape = shapeBtn.dataset.shape; saveSkins(); recordSkinCustomized(); renderSkinsOverlay(); return; }
   });
   resetSkinsBtn.addEventListener('click', ()=>{
     pieceSkins = defaultSkins();
@@ -919,9 +933,7 @@
 
 
   // ---------- campaña: interfaz y selección de niveles ----------
-  const campaignBtn=document.createElement('button');
-  campaignBtn.type='button'; campaignBtn.className='text-link'; campaignBtn.id='campaignLinkBtn'; campaignBtn.textContent='🏕️ Modo campaña';
-  const menuLinks=document.querySelector('.menu-links'); if(menuLinks) menuLinks.insertBefore(campaignBtn, menuLinks.firstChild);
+  const campaignBtn=document.getElementById('campaignLinkBtn');
   const campaignOverlay=document.createElement('div');
   campaignOverlay.id='campaignOverlay'; campaignOverlay.className='overlay-backdrop hidden';
   campaignOverlay.innerHTML=`<div class="modal-card wide campaign-card">
@@ -937,7 +949,7 @@
     const rank=campaignRank(), next=campaignNextRank();
     campaignRankLine.textContent=`${rank.name} · ${campaignData.xp} XP · ${campaignData.wins} victorias`;
     const prev=rank.min, max=next?next.min:Math.max(rank.min+1,campaignData.xp);
-    campaignProgressFill.style.width=(next?Math.max(0,Math.min(100,((campaignData.xp-prev)/(max-prev))*100):100)+'%';
+    campaignProgressFill.style.width=(next?Math.max(0,Math.min(100,((campaignData.xp-prev)/(max-prev))*100)):100)+'%';
     campaignNextLine.textContent=next?`${next.min-campaignData.xp} XP para rango ${next.name}`:'Rango máximo alcanzado';
     campaignLevelsEl.innerHTML=CAMPAIGN_LEVELS.map(l=>{
       const unlocked=campaignLevelUnlocked(l.id), done=campaignData.completed.includes(l.id), locked=!unlocked;
@@ -954,7 +966,7 @@
     closeOverlay('campaign'); startCampaignLevel(level);
   });
   function startCampaignLevel(level){
-    const names=['Jugador 1',level.rival]; savePlayerNames(names);
+    const names=loadPlayerNames();
     initGame(2,level.size,{isCpu:true,difficulty:level.difficulty,names,ruleset:'classic',campaign:true,campaignLevel:level.id,campaignRival:level.rival,campaignPersonality:level.personality});
     menuScreen.classList.add('hidden'); gameScreen.classList.remove('hidden');
     setTimeout(()=>{ hintLine.textContent=`${level.rival}: ${level.intro}`; },0);
@@ -1038,10 +1050,19 @@
   function botPlanMove(idx){
     const bot=state.players[idx], difficulty=bot.difficulty||'easy';
     const profiles={easy:{wallChance:.12,randomness:.55,personality:'speed'},normal:{wallChance:.32,randomness:.28,personality:'speed'},hard:{wallChance:.58,randomness:.12,personality:'aggressive'},expert:{wallChance:.82,randomness:.04,personality:'strategist'}};
-    const profile=profiles[difficulty]||profiles.easy, oppIdx=otherPlayerClosestToCenter(idx);
+    const profile=Object.assign({}, profiles[difficulty]||profiles.easy);
+    if(state.campaign && state.campaignPersonality){
+      profile.personality=state.campaignPersonality;
+      if(profile.personality==='defensive') profile.wallChance=Math.min(.9,profile.wallChance+.2);
+      else if(profile.personality==='aggressive') profile.wallChance=Math.min(.9,profile.wallChance+.1);
+      else if(profile.personality==='speed') profile.wallChance=Math.max(.05,profile.wallChance-.1);
+    }
+    const isHunterBot = state.ruleset==='hunter' && bot.id!==0;
+    if(isHunterBot) profile.wallChance=Math.max(profile.wallChance,.85);
+    const oppIdx = isHunterBot ? 0 : otherPlayerClosestToCenter(idx);
     if(bot.wallsLeft>0&&oppIdx!=null){
       const myDist=distanceToCenter(bot.r,bot.c,state.blockedEdges),oppDist=distanceToCenter(state.players[oppIdx].r,state.players[oppIdx].c,state.blockedEdges);
-      if(oppDist<=myDist+1&&Math.random()<profile.wallChance){ const w=findBestBlockingWall(oppIdx,oppDist); if(w)return {type:'wall',r:w.r,c:w.c,orientation:w.orientation}; }
+      if((isHunterBot||oppDist<=myDist+1)&&Math.random()<profile.wallChance){ const w=findBestBlockingWall(oppIdx,oppDist); if(w)return {type:'wall',r:w.r,c:w.c,orientation:w.orientation}; }
     }
     const moves=state.validMoves; if(!moves.length)return {type:'move',r:bot.r,c:bot.c};
     const scored=moves.map(m=>({m,score:scoreBotMove(idx,m,profile.personality)})).sort((a,b)=>b.score-a.score);
@@ -1060,18 +1081,22 @@
     if(state.ruleset!=='teams') return null;
     return (playerId===0 || playerId===2) ? 'A' : 'B';
   }
-  function finishGame(p){
+  function finishGame(p, tag){
     state.winner = p;
+    state.resultTag = tag || null;
     const winnerTeam = teamOf(p.id);
     const wallsStart = p.wallsStart;
-    const wallsUsedByWinner = wallsStart - p.wallsLeft;
+    const wallsUsedByWinner = Math.max(0, wallsStart - p.wallsLeft);
+    if(state.campaign){
+      state.campaignXPReward = awardCampaignXP(state.campaignLevel, p.id===0);
+    }
     if(state.isDaily){
       recordDailyResult(state.moveCount, state.dailyPar);
     } else {
       recordGameResult({
         winnerSlot: p.id,
         isCpuGame: !!state.isCpuGame,
-        isCpuHard: !!(state.isCpuGame && state.players[1] && state.players[1].difficulty==='hard'),
+        isCpuHard: !!(state.isCpuGame && state.players[1] && (state.players[1].difficulty==='hard' || state.players[1].difficulty==='expert')),
         ruleset: state.ruleset,
         size: state.size,
         playersCount: state.players.length,
@@ -1127,6 +1152,7 @@
     state.moveCount = (state.moveCount||0) + 1;
     maybePickUpPower(p);
     if(checkWinAfterMove(p)){
+      state.winner = p;
       render(idx);
       finishGame(p);
       return;
@@ -1163,6 +1189,15 @@
     state.moveCount = (state.moveCount||0) + 1;
     playWallSound();
     vibrate(18);
+    if(state.ruleset==='hill' && isHillCell(cp.r,cp.c)){
+      cp.hillTurns = (cp.hillTurns||0) + 1;
+      if(cp.hillTurns>=HILL_TARGET){
+        state.winner = cp;
+        render();
+        finishGame(cp);
+        return;
+      }
+    }
     advanceTurn();
     maybeSpawnPower();
     checkHunterTimeout();
@@ -1196,12 +1231,10 @@
   }
   function autoPlayRandomMove(){
     if(!state || state.winner) return;
-    const idx = state.currentPlayerIndex;
     const moves = state.validMoves;
-    if(!moves.length) return;
-    const scored = moves.map(m=> ({ m, d: distanceToCenter(m.r, m.c, state.blockedEdges) }));
-    scored.sort((a,b)=> a.d-b.d);
-    performMove(scored[0].m.r, scored[0].m.c);
+    if(!moves.length){ advanceTurn(); render(); return; }
+    const m = moves[Math.floor(Math.random()*moves.length)];
+    performMove(m.r, m.c);
   }
 
   // ---------- shapes ----------
@@ -1309,7 +1342,7 @@
     movesEl.innerHTML = movesHTML;
 
     let wallsHTML = '';
-    const fogCenter = (state.ruleset==='fog' && activePlayer) ? activePlayer : null;
+    const fogCenter = (state.ruleset==='fog' && activePlayer) ? (activePlayer.isCPU ? (state.players.find(pl=> !pl.isCPU) || activePlayer) : activePlayer) : null;
     for(const w of state.walls){
       if(fogCenter){
         const dist = Math.max(Math.abs(w.r-fogCenter.r), Math.abs(w.c-fogCenter.c));
@@ -1386,7 +1419,7 @@
       const hunterTag = (state.ruleset==='hunter') ? (p.id===0 ? '<span class="cpu-tag">🏃 fugitivo</span>' : '<span class="cpu-tag">🏹 cazador</span>') : '';
       return `<li class="player-row ${active?'active':''}" style="--pc:${p.color}; --pc-bg:${bg}">
         <span class="row-icon">${smallShapeSVG(p.shape,p.color,22)}</span>
-        <span class="player-name">${escapeHtml(p.name)}${cpuTag}${teamTag}${stunTag}</span>
+        <span class="player-name">${escapeHtml(p.name)}${cpuTag}${teamTag}${stunTag}${hillTag}${hunterTag}</span>
         <span class="wall-count">${p.wallsLeft} <span class="wall-label">paredes</span></span>
       </li>`;
     }).join('');
@@ -1399,7 +1432,7 @@
       winTitle.style.color = state.winner.color;
       winCard.style.setProperty('--wc', state.winner.color);
       const msgEl = winCard.querySelector('p');
-      if(msgEl) msgEl.textContent = 'Los cazadores se las arreglaron con las paredes para acorralarlo antes de que se acabaran los turnos.';
+      if(msgEl) msgEl.textContent = 'Se acabaron los turnos y el fugitivo no llegó al centro.';
     } else if(state.isDaily){
       const par = state.dailyPar;
       const used = state.moveCount;
@@ -1469,7 +1502,7 @@
       }
       return {
         id: i,
-        name: isCPU ? 'CPU' : ((names[i] && names[i].trim()) ? names[i].trim() : PALETTE[i].name),
+        name: isCPU ? (options.campaignRival || 'CPU') : ((names[i] && names[i].trim()) ? names[i].trim() : PALETTE[i].name),
         color: skin.color,
         shape: skin.shape,
         r: slots[slotKey].r,
@@ -1506,6 +1539,9 @@
       campaignLevel: options.campaignLevel || null,
       campaignRival: options.campaignRival || null,
       campaignPersonality: options.campaignPersonality || null,
+      campaignXPReward: 0,
+      presetWalls: Array.isArray(options.presetWalls) ? options.presetWalls : null,
+      isCustomLevel: !!options.isCustomLevel,
     };
     mode = 'move';
 
@@ -1560,7 +1596,7 @@
   function finishWallDrag(){
     if(!dragging) return;
     dragging = false;
-    if(previewSlot && previewSlot.valid){
+    if(mode==='wall' && previewSlot && previewSlot.valid){
       commitWall(previewSlot.r, previewSlot.c, previewSlot.orientation);
     }
     hideWallPreview();
@@ -1638,6 +1674,17 @@
       playersFieldset.classList.toggle('hidden', m==='cpu');
     }
     renderNameInputs(currentPlayersCount(), m==='cpu');
+    refreshCustomLevelSelect();
+  }
+  function refreshCustomLevelSelect(){
+    const isMaze = currentRuleset()==='maze';
+    customLevelFieldset.classList.toggle('hidden', !isMaze);
+    if(!isMaze) return;
+    const previous = customLevelSelect.value;
+    const list = loadCustomLevels();
+    customLevelSelect.innerHTML = '<option value="random">🎲 Paredes al azar</option>' +
+      list.map((lvl,i)=> `<option value="${i}">${escapeHtml(lvl.name)} (${lvl.size}×${lvl.size})</option>`).join('');
+    customLevelSelect.value = (previous!=='random' && list[+previous]) ? previous : 'random';
   }
   rulesetSelect.addEventListener('change', updateMenuVisibility);
   document.getElementById('modeGroup').addEventListener('change', updateMenuVisibility);
@@ -1899,14 +1946,22 @@
   editorSaveBtn.addEventListener('click', ()=>{
     if(!editorState.walls.length){ editorFeedback.textContent='Agregá al menos una pared antes de guardar.'; return; }
     if(!editorValidate()){ editorFeedback.textContent='Este diseño deja a algún jugador sin camino posible al centro. Ajustalo antes de guardar.'; return; }
-    const name = prompt('¿Cómo se llama este nivel?', 'Mi nivel');
-    if(!name) return;
+    levelNameInput.value = 'Mi nivel';
+    openOverlay('levelName');
+    setTimeout(()=>{ try{ levelNameInput.focus(); levelNameInput.select(); }catch(e){} }, 50);
+  });
+  function confirmSaveLevel(){
+    const name = (levelNameInput.value || '').trim() || 'Mi nivel';
     const list = loadCustomLevels();
     list.push({ name: name.slice(0,24), size: editorState.size, walls: editorState.walls.map(w=>({r:w.r,c:w.c,orientation:w.orientation})) });
     saveCustomLevels(list);
     renderEditorLevelsList();
     editorFeedback.textContent = 'Nivel guardado.';
-  });
+    closeOverlay('levelName');
+  }
+  levelNameSaveBtn.addEventListener('click', confirmSaveLevel);
+  levelNameCancelBtn.addEventListener('click', ()=> closeOverlay('levelName'));
+  levelNameInput.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); confirmSaveLevel(); } });
   editorPlayBtn.addEventListener('click', ()=>{
     if(editorState.walls.length && !editorValidate()){
       editorFeedback.textContent='Este diseño deja a algún jugador sin camino posible al centro. Ajustalo antes de jugar.';
@@ -1924,6 +1979,7 @@
   editorBackBtn.addEventListener('click', ()=>{
     editorScreen.classList.add('hidden');
     menuScreen.classList.remove('hidden');
+    refreshCustomLevelSelect();
   });
 
   // ---------- menú & navegación ----------
@@ -1942,6 +1998,12 @@
       difficulty: (state.players[1] && state.players[1].difficulty) || 'easy',
       names: loadPlayerNames(),
       ruleset: state.ruleset,
+      campaign: state.campaign,
+      campaignLevel: state.campaignLevel,
+      campaignRival: state.campaignRival,
+      campaignPersonality: state.campaignPersonality,
+      presetWalls: state.presetWalls,
+      isCustomLevel: state.isCustomLevel,
     };
     const playersCount = state.players.length;
     const size = state.size;
@@ -1954,7 +2016,12 @@
     const m = currentMode();
     const isCpu = m==='cpu';
     const playersCount = currentPlayersCount();
-    const size = +document.querySelector('input[name="size"]:checked').value;
+    let size = +document.querySelector('input[name="size"]:checked').value;
+    let presetWalls = null, isCustomLevel = false;
+    if(ruleset==='maze' && customLevelSelect.value!=='random'){
+      const lvl = loadCustomLevels()[+customLevelSelect.value];
+      if(lvl){ size = lvl.size; presetWalls = lvl.walls; isCustomLevel = true; }
+    }
     const diffRadio = document.querySelector('input[name="difficulty"]:checked');
     const difficulty = diffRadio ? diffRadio.value : 'easy';
 
@@ -1965,9 +2032,9 @@
       if(inp){ names[i] = inp.value.trim(); }
     }
     savePlayerNames(names);
-    saveLastSetup({ playersCount, size, mode:m, difficulty, ruleset });
+    saveLastSetup({ playersCount, size: +document.querySelector('input[name="size"]:checked').value, mode:m, difficulty, ruleset });
 
-    initGame(playersCount, size, { isCpu, difficulty, names, ruleset });
+    initGame(playersCount, size, { isCpu, difficulty, names, ruleset, presetWalls, isCustomLevel });
     menuScreen.classList.add('hidden');
     gameScreen.classList.remove('hidden');
   });

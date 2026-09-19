@@ -62,6 +62,14 @@
       <p class="field-hint" id="rulesetHint"></p>
     </fieldset>
 
+    <fieldset id="customLevelFieldset" class="hidden">
+      <legend>Diseño del laberinto</legend>
+      <select class="select-field" id="customLevelSelect">
+        <option value="random">🎲 Paredes al azar</option>
+      </select>
+      <p class="field-hint">Podés usar un nivel que hayas guardado en el editor. En ese caso se usa el tamaño del nivel.</p>
+    </fieldset>
+
     <fieldset>
       <legend>Tamaño del tablero</legend>
       <div class="segmented" id="sizeGroup">
@@ -242,6 +250,18 @@
     <div class="modal-actions">
       <button class="primary-btn" id="playDailyBtn">Jugar</button>
       <button class="secondary-btn" id="closeDailyBtn">Cerrar</button>
+    </div>
+  </div>
+</div>
+
+<div id="levelNameOverlay" class="overlay-backdrop hidden">
+  <div class="modal-card" id="levelNameCard">
+    <h2>Guardar nivel</h2>
+    <p>¿Cómo se llama este nivel?</p>
+    <input type="text" class="name-input" id="levelNameInput" maxlength="24" value="Mi nivel" aria-label="Nombre del nivel">
+    <div class="modal-actions">
+      <button class="primary-btn" id="levelNameSaveBtn">Guardar</button>
+      <button class="secondary-btn" id="levelNameCancelBtn">Cancelar</button>
     </div>
   </div>
 </div>
