@@ -1388,10 +1388,10 @@
     updateHunterBadge();
   }
   function updateHunterBadge(){
-    if(!state || state.ruleset!=='hunter' || state.winner){
-      if(!state || state.ruleset!=='blitz') turnTimerBadge.classList.add('hidden');
-      return;
-    }
+    // Sólo maneja el contador del modo Cazador. El reloj de turno (Contrarreloj / niveles con
+    // tiempo) administra su propio badge en startTurnTimer/clearTurnTimer, así que acá no lo tocamos.
+    if(!state || state.ruleset!=='hunter' || state.winner) return;
+    if(turnTimerInterval) return; // hay un reloj de turno corriendo: tiene prioridad sobre el badge
     const remaining = Math.max(0, state.hunterTurnLimit - (state.moveCount||0));
     turnTimerBadge.classList.remove('hidden');
     turnTimerBadge.classList.toggle('low', remaining<=5);
@@ -1896,6 +1896,7 @@
     if(el.dataset.field==='r') p.r=Math.max(0,Math.min(editorState.size-1,(v||1)-1));
     if(el.dataset.field==='c') p.c=Math.max(0,Math.min(editorState.size-1,(v||1)-1));
     if(el.dataset.field==='walls') p.walls=Math.max(0,Math.min(50,v||0));
+    if(el.dataset.field==='r' || el.dataset.field==='c') renderEditor();
   });
   function editorCanPlaceWallSlot(r,c,orientation){
     const size = editorState.size;
@@ -1936,9 +1937,11 @@
     }
     if(obj.r<0||obj.c<0||obj.r>=size||obj.c>=size) return false;
     const blockedSet=new Set();
-    editorState.walls.forEach(w=>wallEdges(w.r,w.c,w.orientation).forEach(e=>blockedSet.add(edgeKey(e[0],e[1],e[2],e[3])));
+    editorState.walls.forEach(w=>wallEdges(w.r,w.c,w.orientation).forEach(e=>blockedSet.add(edgeKey(e[0],e[1],e[2],e[3]))));
     for(const p of editorState.players) if(!hasPath(p.r,p.c,obj.r,obj.c,blockedSet,size)) return false;
+    if(editorState.players.some(p=>p.r===obj.r&&p.c===obj.c)) return false; // nadie puede empezar sobre el objetivo
     if(editorState.ruleset==='teams'&&editorState.players.length!==4) return false;
+    if(editorState.ruleset==='mirror'&&editorState.players.length!==2) return false;
     return true;
   }
   function renderEditor(){
@@ -2036,7 +2039,7 @@
   editorSizeSelect.addEventListener('change', ()=>{editorReset(+editorSizeSelect.value);syncEditorControls();});
   editorClearBtn.addEventListener('click', ()=>{editorReset(editorState.size);syncEditorControls();editorFeedback.textContent='Tablero limpio.';});
   editorSaveBtn.addEventListener('click', ()=>{
-    if(!editorValidate()){ editorFeedback.textContent='El diseño no es válido: revisá las posiciones, el objetivo o los caminos posibles.'; return; }
+    if(!editorValidate()){ editorFeedback.textContent='El diseño no es válido: revisá las posiciones de los jugadores, el objetivo, los caminos posibles o la cantidad de jugadores que pide el modo elegido.'; return; }
     levelNameInput.value = 'Mi nivel';
     openOverlay('levelName');
     setTimeout(()=>{ try{ levelNameInput.focus(); levelNameInput.select(); }catch(e){} }, 50);
@@ -2054,11 +2057,18 @@
   levelNameCancelBtn.addEventListener('click', ()=> closeOverlay('levelName'));
   levelNameInput.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); confirmSaveLevel(); } });
   editorPlayBtn.addEventListener('click', ()=>{
-    if(editorState.walls.length && !editorValidate()){
-      editorFeedback.textContent='Este diseño deja a algún jugador sin camino posible al centro. Ajustalo antes de jugar.';
+    if(!editorValidate()){
+      editorFeedback.textContent='El diseño no es válido: revisá las posiciones de los jugadores, el objetivo, que todos tengan camino posible o la cantidad de jugadores que pide el modo elegido.';
       return;
     }
-    startCustomLevelMatch({ size: editorState.size, walls: editorState.walls });
+    startCustomLevelMatch({
+      size: editorState.size,
+      objective: { r: editorState.objective.r, c: editorState.objective.c },
+      turnTime: editorState.turnTime||0,
+      ruleset: editorState.ruleset||'classic',
+      players: editorState.players.map(p=>({ r:p.r, c:p.c, walls:p.walls, isCPU:!!p.isCPU, difficulty:p.difficulty||'easy' })),
+      walls: editorState.walls.map(w=>({ r:w.r, c:w.c, orientation:w.orientation })),
+    });
   });
   editorLinkBtn.addEventListener('click', ()=>{
     editorReset(9);
@@ -2080,6 +2090,7 @@
     hideWinOverlay();
     gameScreen.classList.add('hidden');
     menuScreen.classList.remove('hidden');
+    refreshCustomLevelSelect();
   }
   function doRestart(){
     if(!state) return;

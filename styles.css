@@ -304,7 +304,7 @@
 
 
 /* ---------- FASE 2: CAMPAÑA Y PROGRESIÓN ---------- */
-.campaign-card{ max-width:560px; }
+.modal-card.campaign-card{ max-width:560px; }
 .campaign-rank-line{ text-align:center; font-weight:700; margin-bottom:10px !important; }
 .campaign-next-line{ text-align:center; font-size:.78rem !important; margin:7px 0 14px !important; }
 .campaign-progress{ height:10px; border-radius:999px; background:var(--panel-2); border:1px solid var(--line); overflow:hidden; }
