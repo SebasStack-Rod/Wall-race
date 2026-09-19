@@ -287,6 +287,28 @@
     <button type="button" class="ghost-btn" id="editorSaveBtn">💾 Guardar</button>
     <button type="button" class="ghost-btn" id="editorPlayBtn">▶️ Jugar este diseño</button>
   </div>
+  <div class="editor-config-grid">
+    <fieldset><legend>Objetivo</legend>
+      <div class="editor-inline">
+        <label><input type="radio" name="editorObjective" value="center" checked> Centro</label>
+        <label><input type="radio" name="editorObjective" value="custom"> Casilla personalizada</label>
+      </div>
+      <div class="editor-coords hidden" id="editorObjectiveCoords">
+        <label>Fila <input type="number" id="editorObjectiveRow" min="1" value="5"></label>
+        <label>Columna <input type="number" id="editorObjectiveCol" min="1" value="5"></label>
+      </div>
+    </fieldset>
+    <fieldset><legend>Partida</legend>
+      <div class="editor-fields-2">
+        <label>Jugadores<select class="select-field" id="editorPlayersCount"><option value="2" selected>2</option><option value="3">3</option><option value="4">4</option></select></label>
+        <label>Tiempo por turno<select class="select-field" id="editorTurnTime"><option value="0">Sin límite</option><option value="10">10 s</option><option value="15">15 s</option><option value="20">20 s</option><option value="30">30 s</option><option value="60">60 s</option></select></label>
+      </div>
+      <label>Reglas<select class="select-field" id="editorRuleset">
+        <option value="classic">🎯 Clásico</option><option value="fog">🌫️ Niebla</option><option value="teams">🤝 2v2</option><option value="party">🎉 Fiesta</option><option value="blitz">⏱️ Contrarreloj</option><option value="mirror">🪞 Espejo</option><option value="hill">⛰️ Rey de la colina</option><option value="hunter">🏹 Cazador y fugitivo</option>
+      </select></label>
+    </fieldset>
+  </div>
+  <div class="editor-players" id="editorPlayersConfig"></div>
   <div class="game-layout">
     <div class="board-wrap">
       <svg id="editorBoardSvg" viewBox="0 0 630 630" xmlns="http://www.w3.org/2000/svg">
