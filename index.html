@@ -36,9 +36,10 @@
     <fieldset id="difficultyFieldset" class="hidden">
       <legend>Dificultad de la IA</legend>
       <div class="segmented" id="difficultyGroup">
-        <input type="radio" name="difficulty" id="diffEasy" value="easy" checked><label for="diffEasy" aria-label="Fácil" title="Fácil"><span class="stars-row"><img src="assets/ui/star.png" alt=""><img src="assets/ui/star-off.png" alt=""><img src="assets/ui/star-off.png" alt=""></span></label>
-        <input type="radio" name="difficulty" id="diffNormal" value="normal"><label for="diffNormal" aria-label="Normal" title="Normal"><span class="stars-row"><img src="assets/ui/star.png" alt=""><img src="assets/ui/star.png" alt=""><img src="assets/ui/star-off.png" alt=""></span></label>
-        <input type="radio" name="difficulty" id="diffHard" value="hard"><label for="diffHard" aria-label="Difícil" title="Difícil"><span class="stars-row"><img src="assets/ui/star.png" alt=""><img src="assets/ui/star.png" alt=""><img src="assets/ui/star.png" alt=""></span></label>
+        <input type="radio" name="difficulty" id="diffEasy" value="easy" checked><label for="diffEasy" aria-label="Fácil" title="Fácil"><span class="stars-row"><img src="assets/ui/star.png" alt=""><img src="assets/ui/star-off.png" alt=""><img src="assets/ui/star-off.png" alt=""><img src="assets/ui/star-off.png" alt=""></span></label>
+        <input type="radio" name="difficulty" id="diffNormal" value="normal"><label for="diffNormal" aria-label="Normal" title="Normal"><span class="stars-row"><img src="assets/ui/star.png" alt=""><img src="assets/ui/star.png" alt=""><img src="assets/ui/star-off.png" alt=""><img src="assets/ui/star-off.png" alt=""></span></label>
+        <input type="radio" name="difficulty" id="diffHard" value="hard"><label for="diffHard" aria-label="Difícil" title="Difícil"><span class="stars-row"><img src="assets/ui/star.png" alt=""><img src="assets/ui/star.png" alt=""><img src="assets/ui/star.png" alt=""><img src="assets/ui/star-off.png" alt=""></span></label>
+        <input type="radio" name="difficulty" id="diffExpert" value="expert"><label for="diffExpert" aria-label="Experto" title="Experto"><span class="stars-row"><img src="assets/ui/star.png" alt=""><img src="assets/ui/star.png" alt=""><img src="assets/ui/star.png" alt=""><img src="assets/ui/star.png" alt=""></span></label>
       </div>
       <p class="field-hint" id="difficultyHint"></p>
     </fieldset>
@@ -54,7 +55,12 @@
 
     <fieldset>
       <legend>Modo de partida</legend>
-      <select class="select-field" id="rulesetSelect">
+      <button type="button" class="mode-trigger" id="modeTriggerBtn" aria-haspopup="dialog" aria-controls="modesOverlay" aria-expanded="false">
+        <span class="mt-plate" id="modeTriggerPlate"></span>
+        <span class="mt-text"><span class="mt-name" id="modeTriggerName"></span><span class="mt-sub" id="modeTriggerSub"></span></span>
+        <span class="mt-chev" aria-hidden="true">›</span>
+      </button>
+      <select class="select-field hidden" id="rulesetSelect" tabindex="-1" aria-hidden="true">
         <option value="classic">🎯 Clásico</option>
         <option value="fog">🌫️ Niebla de guerra</option>
         <option value="teams">🤝 2v2 (equipos)</option>
@@ -66,6 +72,14 @@
         <option value="hunter">🏹 Cazador y fugitivo</option>
       </select>
       <p class="field-hint" id="rulesetHint"></p>
+    </fieldset>
+
+    <fieldset id="customLevelFieldset" class="hidden">
+      <legend>Diseño del laberinto</legend>
+      <select class="select-field" id="customLevelSelect">
+        <option value="random">🎲 Paredes al azar</option>
+      </select>
+      <p class="field-hint">Podés usar un nivel que hayas guardado en el editor. En ese caso se usa el tamaño del nivel.</p>
     </fieldset>
 
     <fieldset>
@@ -84,6 +98,7 @@
     </fieldset>
 
     <button id="startBtn" class="kbtn yellow big block">Comenzar partida</button>
+    <button type="button" class="kbtn green block campaign-btn" id="campaignLinkBtn">🏕️ Modo campaña</button>
 
     <div class="menu-grid">
       <button type="button" class="kbtn sq grey tile" id="dailyLinkBtn"><span class="tile-ico">🗓️</span><span class="tile-label">Diario</span></button>
@@ -184,6 +199,31 @@
     <div class="modal-actions">
       <button class="kbtn green block" id="levelNameOkBtn">Guardar</button>
       <button class="kbtn grey block" id="levelNameCancelBtn">Cancelar</button>
+    </div>
+  </div>
+</div>
+
+<div id="campaignOverlay" class="overlay-backdrop hidden">
+  <div class="modal-card wide campaign-card">
+    <h2>🏕️ Campaña</h2>
+    <p id="campaignRankLine" class="campaign-rank-line"></p>
+    <div class="campaign-progress"><div id="campaignProgressFill"></div></div>
+    <p id="campaignNextLine" class="campaign-next-line"></p>
+    <div id="campaignLevels" class="campaign-levels"></div>
+    <div class="modal-actions">
+      <button type="button" class="kbtn grey block" id="closeCampaignBtn">Volver</button>
+    </div>
+  </div>
+</div>
+
+<div id="modesOverlay" class="overlay-backdrop modes-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="modesTitle">
+  <div class="modal-card modes-card" id="modesCard">
+    <h2 id="modesTitle">Elegí un modo</h2>
+    <div class="modes-grid" id="modesGrid" role="radiogroup" aria-label="Modos de partida"></div>
+    <div class="mode-detail" id="modeDetail" aria-live="polite"></div>
+    <div class="modal-actions">
+      <button type="button" class="kbtn yellow big block" id="modesConfirmBtn">Elegir este modo</button>
+      <button type="button" class="kbtn grey block" id="modesCloseBtn">Cerrar</button>
     </div>
   </div>
 </div>
@@ -335,6 +375,28 @@
     <button type="button" class="kbtn green small" id="editorSaveBtn">💾 Guardar</button>
     <button type="button" class="kbtn yellow small" id="editorPlayBtn">▶️ Jugar este diseño</button>
   </div>
+  <div class="editor-config-grid">
+    <fieldset><legend>Objetivo</legend>
+      <div class="segmented" id="editorObjectiveGroup">
+          <input type="radio" name="editorObjective" id="objCenter" value="center" checked><label for="objCenter">Centro</label>
+          <input type="radio" name="editorObjective" id="objCustom" value="custom"><label for="objCustom">Casilla personalizada</label>
+        </div>
+      <div class="editor-coords hidden" id="editorObjectiveCoords">
+        <label>Fila <input type="number" id="editorObjectiveRow" min="1" value="5"></label>
+        <label>Columna <input type="number" id="editorObjectiveCol" min="1" value="5"></label>
+      </div>
+    </fieldset>
+    <fieldset><legend>Partida</legend>
+      <div class="editor-fields-2">
+        <label>Jugadores<select class="select-field" id="editorPlayersCount"><option value="2" selected>2</option><option value="3">3</option><option value="4">4</option></select></label>
+        <label>Tiempo por turno<select class="select-field" id="editorTurnTime"><option value="0">Sin límite</option><option value="10">10 s</option><option value="15">15 s</option><option value="20">20 s</option><option value="30">30 s</option><option value="60">60 s</option></select></label>
+      </div>
+      <label>Reglas<select class="select-field" id="editorRuleset">
+        <option value="classic">🎯 Clásico</option><option value="fog">🌫️ Niebla</option><option value="teams">🤝 2v2</option><option value="party">🎉 Fiesta</option><option value="blitz">⏱️ Contrarreloj</option><option value="mirror">🪞 Espejo</option><option value="hill">⛰️ Rey de la colina</option><option value="hunter">🏹 Cazador y fugitivo</option>
+      </select></label>
+    </fieldset>
+  </div>
+  <div class="editor-players" id="editorPlayersConfig"></div>
   <div class="game-layout">
     <div class="board-wrap">
       <svg id="editorBoardSvg" viewBox="0 0 630 630" xmlns="http://www.w3.org/2000/svg">

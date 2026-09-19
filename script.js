@@ -33,6 +33,7 @@
     easy:   { label:'Fácil',   wall:0.28, random:0.30, coins:10, hint:'La IA se equivoca seguido y bloquea poco. Ganar da 10 monedas.' },
     normal: { label:'Normal',  wall:0.50, random:0.20, coins:20, hint:'Una IA equilibrada: bloquea a veces y casi no se equivoca. Ganar da 20 monedas.' },
     hard:   { label:'Difícil', wall:0.72, random:0.10, coins:35, hint:'Bloquea todo el tiempo y casi no falla. Ganar da 35 monedas.' },
+    expert: { label:'Experto', wall:0.90, random:0.03, coins:50, hint:'La IA más dura: calcula rutas, bloquea con precisión y casi nunca falla. Ganar da 50 monedas.' },
   };
   const DAILY_GAME_COIN_CAP = 120;      // tope diario de monedas por ganar partidas (el desafío diario y los trofeos no cuentan)
   const EMOTE_LIFE_MS = 2500;
@@ -84,6 +85,34 @@
   const BLITZ_SECONDS = 20;
   const HILL_TARGET = 3; // turnos (no necesariamente seguidos) que hay que acumular en la zona central
   const HUNTER_TURNS_PER_SIZE = 3; // límite de turnos totales = size * este valor
+  const CAMPAIGN_LEVELS = [
+    { id:1, name:'Primer duelo', rival:'Toto', personality:'speed', difficulty:'easy', size:5, xp:100, intro:'Toto todavía está aprendiendo. Aprovechá sus movimientos directos.' },
+    { id:2, name:'El desafío de Mora', rival:'Mora', personality:'defensive', difficulty:'easy', size:7, xp:125, intro:'Mora prefiere cerrar caminos antes que correr al centro.' },
+    { id:3, name:'Rulo contraataca', rival:'Rulo', personality:'aggressive', difficulty:'normal', size:7, xp:150, intro:'Rulo empieza a usar las paredes para frenarte.' },
+    { id:4, name:'La estratega Nina', rival:'Nina', personality:'strategist', difficulty:'normal', size:9, xp:175, intro:'Nina calcula mejor sus bloqueos y busca el camino más corto.' },
+    { id:5, name:'Bruno no cede', rival:'Bruno', personality:'defensive', difficulty:'normal', size:9, xp:200, intro:'Bruno conserva paredes y espera el momento justo.' },
+    { id:6, name:'Vega acelera', rival:'Vega', personality:'speed', difficulty:'hard', size:9, xp:225, intro:'Vega prioriza avanzar y te obliga a reaccionar rápido.' },
+    { id:7, name:'Sombra', rival:'Sombra', personality:'aggressive', difficulty:'hard', size:11, xp:250, intro:'Sombra empieza a presionar con bloqueos cerca de tu ruta.' },
+    { id:8, name:'Atlas', rival:'Atlas', personality:'strategist', difficulty:'hard', size:11, xp:275, intro:'Atlas analiza el tablero completo antes de decidir.' },
+    { id:9, name:'Lince', rival:'Lince', personality:'speed', difficulty:'expert', size:9, xp:300, intro:'Lince combina velocidad con bloqueos oportunistas.' },
+    { id:10, name:'El maestro', rival:'Maestro', personality:'strategist', difficulty:'expert', size:11, xp:400, intro:'El último rival domina todas las herramientas del tablero.' },
+  ];
+  const CAMPAIGN_RANKS = [
+    { name:'Novato', min:0 }, { name:'Aprendiz', min:150 }, { name:'Táctico', min:400 },
+    { name:'Estratega', min:750 }, { name:'Maestro', min:1200 }, { name:'Leyenda', min:1800 }
+  ];
+  const CAMPAIGN_SKIN_UNLOCKS = { 4:{color:'#8e5fb0'}, 6:{color:'#2f9e97'}, 8:{color:'#c25b9c'}, 10:{color:'#6b7280'} };
+  const CAMPAIGN_SHAPE_UNLOCKS = { 3:'star', 5:'hex' };
+  function blankCampaign(){ return { xp:0, unlockedLevel:1, completed:[], wins:0, losses:0 }; }
+  function loadCampaign(){
+    const base=blankCampaign();
+    try{
+      const raw=localStorage.getItem('quoridor_campaign');
+      if(raw){ const d=JSON.parse(raw)||{}; base.xp=+d.xp||0; base.unlockedLevel=Math.max(1,Math.min(CAMPAIGN_LEVELS.length,+d.unlockedLevel||1)); base.completed=Array.isArray(d.completed)?d.completed:[]; base.wins=+d.wins||0; base.losses=+d.losses||0; }
+    }catch(e){}
+    return base;
+  }
+  let campaignData=loadCampaign();
   const PARTY_TYPES = ['pared_extra','turno_extra','aturdido'];
   // Plantillas de paredes para el modo Laberinto: cada una es una lista de segmentos
   // relativos a un punto de anclaje (dr,dc,orientation). Se prueban una por una y si
@@ -261,7 +290,32 @@
   const glassToggle = document.getElementById('glassToggle');
   const difficultyHint = document.getElementById('difficultyHint');
 
-  const overlayEls = { win:winOverlay, confirm:confirmOverlay, settings:settingsOverlay, tutorial:tutorialOverlay, stats:statsOverlay, skins:skinsOverlay, achievements:achievementsOverlay, daily:dailyOverlay, pause:pauseOverlay, more:moreOverlay, shop:shopOverlay, namePrompt:namePromptOverlay };
+  const customLevelFieldset = document.getElementById('customLevelFieldset');
+  const customLevelSelect = document.getElementById('customLevelSelect');
+  const editorPlayersCount = document.getElementById('editorPlayersCount');
+  const editorTurnTime = document.getElementById('editorTurnTime');
+  const editorRuleset = document.getElementById('editorRuleset');
+  const editorPlayersConfig = document.getElementById('editorPlayersConfig');
+  const editorObjectiveCoords = document.getElementById('editorObjectiveCoords');
+  const editorObjectiveRow = document.getElementById('editorObjectiveRow');
+  const editorObjectiveCol = document.getElementById('editorObjectiveCol');
+  const campaignBtn = document.getElementById('campaignLinkBtn');
+  const campaignOverlay = document.getElementById('campaignOverlay');
+  const closeCampaignBtn = document.getElementById('closeCampaignBtn');
+  const campaignLevelsEl = document.getElementById('campaignLevels');
+  const campaignRankLine = document.getElementById('campaignRankLine');
+  const campaignNextLine = document.getElementById('campaignNextLine');
+  const campaignProgressFill = document.getElementById('campaignProgressFill');
+  const modeTriggerBtn = document.getElementById('modeTriggerBtn');
+  const modeTriggerPlate = document.getElementById('modeTriggerPlate');
+  const modeTriggerName = document.getElementById('modeTriggerName');
+  const modeTriggerSub = document.getElementById('modeTriggerSub');
+  const modesOverlay = document.getElementById('modesOverlay');
+  const modesGrid = document.getElementById('modesGrid');
+  const modeDetail = document.getElementById('modeDetail');
+  const modesConfirmBtn = document.getElementById('modesConfirmBtn');
+  const modesCloseBtn = document.getElementById('modesCloseBtn');
+  const overlayEls = { campaign:campaignOverlay, modes:modesOverlay, win:winOverlay, confirm:confirmOverlay, settings:settingsOverlay, tutorial:tutorialOverlay, stats:statsOverlay, skins:skinsOverlay, achievements:achievementsOverlay, daily:dailyOverlay, pause:pauseOverlay, more:moreOverlay, shop:shopOverlay, namePrompt:namePromptOverlay };
 
   let state = null;
   let mode = 'move'; // 'move' | 'wall'
@@ -396,7 +450,7 @@
     const testSet = new Set(state.blockedEdges);
     for(const e of edges) testSet.add(edgeKey(e[0],e[1],e[2],e[3]));
     for(const p of state.players){
-      if(!hasPath(p.r,p.c,state.center.r,state.center.c,testSet,state.size)) return { valid:false };
+      if(!hasPath(p.r,p.c,state.objective.r,state.objective.c,testSet,state.size)) return { valid:false };
     }
     return { valid:true, edges };
   }
@@ -413,7 +467,7 @@
     base.edges.forEach(e=> testSet.add(edgeKey(e[0],e[1],e[2],e[3])));
     mEdges.forEach(e=> testSet.add(edgeKey(e[0],e[1],e[2],e[3])));
     for(const p of state.players){
-      if(!hasPath(p.r,p.c,state.center.r,state.center.c,testSet,state.size)) return { valid:false };
+      if(!hasPath(p.r,p.c,state.objective.r,state.objective.c,testSet,state.size)) return { valid:false };
     }
     return { valid:true, edges:base.edges, mirrorEdges:mEdges };
   }
@@ -434,9 +488,9 @@
       return p.hillTurns >= HILL_TARGET;
     }
     if(state.ruleset==='hunter'){
-      return p.id===0 && p.r===state.center.r && p.c===state.center.c;
+      return p.id===0 && p.r===state.objective.r && p.c===state.objective.c;
     }
-    return p.r===state.center.r && p.c===state.center.c;
+    return p.r===state.objective.r && p.c===state.objective.c;
   }
   function checkHunterTimeout(){
     if(!state || state.ruleset!=='hunter' || state.winner) return;
@@ -558,15 +612,19 @@
   }
 
   function advanceTurn(){
+    const n = state.players.length;
     let next = state.currentPlayerIndex;
-    for(let i=0;i<state.players.length;i++){
-      next = (next+1) % state.players.length;
-      if(state.players[next].stunned){ state.players[next].stunned = false; continue; }
+    for(let i=0;i<n;i++){
+      next = (next+1) % n;
+      const cand = state.players[next];
+      if(cand.stunned){ cand.stunned = false; continue; }
+      if(n>1 && cand.wallsLeft<=0 && computeValidMoves(next).length===0) continue;
       break;
     }
     state.currentPlayerIndex = next;
-    state.validMoves = computeValidMoves(state.currentPlayerIndex);
-    mode = 'move';
+    state.validMoves = computeValidMoves(next);
+    const cpNext = state.players[next];
+    mode = (!state.validMoves.length && cpNext.wallsLeft>0 && !cpNext.isCPU) ? 'wall' : 'move';
   }
 
   // ---------- overlays genéricos ----------
@@ -589,6 +647,7 @@
     if(overlayStack.length===0 && !gameScreen.classList.contains('hidden') && state && !state.winner){
       scheduleBotTurnIfNeeded();
       startTurnTimer(true);
+      updateHunterBadge();
     }
   }
   function closeTopOverlay(){
@@ -807,8 +866,8 @@
       statsData.vsCpu.played += 1;
       if(winnerSlot === 0){
         statsData.vsCpu.won += 1;
-        if(summary.cpuDifficulty==='hard') statsData.vsCpuHardWon += 1;
-        if(summary.cpuDifficulty==='hard' || summary.cpuDifficulty==='normal') statsData.vsCpuNormalWon += 1;
+        if(summary.cpuDifficulty==='hard' || summary.cpuDifficulty==='expert') statsData.vsCpuHardWon += 1;
+        if(summary.cpuDifficulty==='hard' || summary.cpuDifficulty==='normal' || summary.cpuDifficulty==='expert') statsData.vsCpuNormalWon += 1;
       }
     }
     if(summary.playersCount===4) statsData.winsWith4 += 1;
@@ -1509,12 +1568,12 @@
     const current = pieceSkins[activeSkinSlot];
     const previewHtml = smallShapeSVG(current.shape, current.color, 64);
     const colorsHtml = SKIN_COLORS.map(c=>{
-      const sel = c===current.color ? 'selected' : '';
-      return `<button type="button" class="color-swatch ${sel}" data-color="${c}" style="background:${c}" aria-label="Color ${c}"></button>`;
+      const sel = c===current.color ? 'selected' : ''; const locked=!campaignSkinColorUnlocked(c);
+      return `<button type="button" class="color-swatch ${sel} ${locked?'locked-swatch':''}" data-color="${c}" style="background:${c}" aria-label="${locked?'Bloqueado':'Color '+c}">${locked?'🔒':''}</button>`;
     }).join('');
     const shapesHtml = SKIN_SHAPES.map(sh=>{
-      const sel = sh===current.shape ? 'selected' : '';
-      return `<button type="button" class="shape-swatch ${sel}" data-shape="${sh}" aria-label="${SHAPE_LABEL[sh]}">${smallShapeSVG(sh,'var(--ink)',22)}</button>`;
+      const sel = sh===current.shape ? 'selected' : ''; const locked=!campaignShapeUnlocked(sh);
+      return `<button type="button" class="shape-swatch ${sel} ${locked?'locked-swatch':''}" data-shape="${sh}" aria-label="${locked?'Bloqueado':SHAPE_LABEL[sh]}">${locked?'🔒':smallShapeSVG(sh,'var(--ink)',22)}</button>`;
     }).join('');
     skinsBody.innerHTML = `
       <div class="slot-tabs">${tabsHtml}</div>
@@ -1526,6 +1585,7 @@
     `;
   }
   function setSkinColor(slot, color){
+    if(!campaignSkinColorUnlocked(color)){ showToast('🔒 Color bloqueado: completá la etapa correspondiente de la campaña.'); return; }
     const currentColorOfSlot = pieceSkins[slot].color;
     const otherIdx = pieceSkins.findIndex((s,i)=> i!==slot && s.color===color);
     pieceSkins[slot].color = color;
@@ -1542,7 +1602,7 @@
     const colorBtn = e.target.closest('.color-swatch');
     if(colorBtn){ setSkinColor(activeSkinSlot, colorBtn.dataset.color); return; }
     const shapeBtn = e.target.closest('.shape-swatch');
-    if(shapeBtn){ pieceSkins[activeSkinSlot].shape = shapeBtn.dataset.shape; saveSkins(); recordSkinCustomized(); renderSkinsOverlay(); return; }
+    if(shapeBtn){ if(!campaignShapeUnlocked(shapeBtn.dataset.shape)){ showToast('🔒 Forma bloqueada: avanzá en la campaña para desbloquearla.'); return; } pieceSkins[activeSkinSlot].shape = shapeBtn.dataset.shape; saveSkins(); recordSkinCustomized(); renderSkinsOverlay(); return; }
   });
   resetSkinsBtn.addEventListener('click', ()=>{
     pieceSkins = defaultSkins();
@@ -1610,59 +1670,40 @@
     });
     return best;
   }
-  function findBestBlockingWall(opponentIdx, currentOppDist){
-    const opp = state.players[opponentIdx];
-    const radius = 2;
-    const minSlot = 0, maxSlot = state.size-2;
-    let candidates = [];
-    for(let r=Math.max(minSlot,opp.r-radius); r<=Math.min(maxSlot,opp.r+radius); r++){
-      for(let c=Math.max(minSlot,opp.c-radius); c<=Math.min(maxSlot,opp.c+radius); c++){
-        for(const orientation of ['h','v']){
-          const evalRes = evaluateWallForMode(r,c,orientation);
-          if(!evalRes.valid) continue;
-          const testSet = new Set(state.blockedEdges);
-          evalRes.edges.forEach(e=> testSet.add(edgeKey(e[0],e[1],e[2],e[3])));
-          const newOppDist = distanceToCenter(opp.r,opp.c,testSet);
-          if(newOppDist > currentOppDist){
-            candidates.push({ r, c, orientation, gain: newOppDist - currentOppDist });
-          }
-        }
-      }
+  function findBestBlockingWall(opponentIdx,currentOppDist){
+    const opp=state.players[opponentIdx], radius=3, maxSlot=state.size-2, candidates=[];
+    for(let r=Math.max(0,opp.r-radius);r<=Math.min(maxSlot,opp.r+radius);r++) for(let c=Math.max(0,opp.c-radius);c<=Math.min(maxSlot,opp.c+radius);c++) for(const orientation of ['h','v']){
+      const ev=evaluateWallForMode(r,c,orientation); if(!ev.valid) continue;
+      const test=new Set(state.blockedEdges); ev.edges.forEach(e=>test.add(edgeKey(e[0],e[1],e[2],e[3])));
+      if(ev.mirrorEdges) ev.mirrorEdges.forEach(e=>test.add(edgeKey(e[0],e[1],e[2],e[3])));
+      const d=distanceToCenter(opp.r,opp.c,test); if(d>currentOppDist) candidates.push({r,c,orientation,gain:d-currentOppDist,newOppDist:d});
     }
-    if(!candidates.length) return null;
-    candidates.sort((a,b)=> b.gain - a.gain);
-    const topGain = candidates[0].gain;
-    const bestOnes = candidates.filter(cd=> cd.gain===topGain);
-    return bestOnes[Math.floor(Math.random()*bestOnes.length)];
+    if(!candidates.length)return null;
+    candidates.sort((a,b)=>b.gain-a.gain||a.newOppDist-b.newOppDist);
+    const gain=candidates[0].gain, top=candidates.filter(x=>x.gain===gain);
+    return top[Math.floor(Math.random()*top.length)];
   }
   function botPlanMove(idx){
-    const bot = state.players[idx];
-    const difficulty = bot.difficulty || 'easy';
-    const cfg = DIFFICULTY[difficulty] || DIFFICULTY.easy;
-    if(bot.wallsLeft > 0){
-      const opponentIdx = otherPlayerClosestToCenter(idx);
-      if(opponentIdx!=null){
-        const myDist = distanceToCenter(bot.r, bot.c, state.blockedEdges);
-        const oppDist = distanceToCenter(state.players[opponentIdx].r, state.players[opponentIdx].c, state.blockedEdges);
-        const wallChance = cfg.wall;
-        if(oppDist <= myDist && Math.random() < wallChance){
-          const wallMove = findBestBlockingWall(opponentIdx, oppDist);
-          if(wallMove) return { type:'wall', r:wallMove.r, c:wallMove.c, orientation:wallMove.orientation };
-        }
-      }
+    const bot=state.players[idx], difficulty=bot.difficulty||'easy';
+    const profiles={easy:{wallChance:.12,randomness:.55,personality:'speed'},normal:{wallChance:.32,randomness:.28,personality:'speed'},hard:{wallChance:.58,randomness:.12,personality:'aggressive'},expert:{wallChance:.82,randomness:.04,personality:'strategist'}};
+    const profile=Object.assign({}, profiles[difficulty]||profiles.easy);
+    if(state.campaign && state.campaignPersonality){
+      profile.personality=state.campaignPersonality;
+      if(profile.personality==='defensive') profile.wallChance=Math.min(.9,profile.wallChance+.2);
+      else if(profile.personality==='aggressive') profile.wallChance=Math.min(.9,profile.wallChance+.1);
+      else if(profile.personality==='speed') profile.wallChance=Math.max(.05,profile.wallChance-.1);
     }
-    const validMoves = state.validMoves;
-    if(!validMoves.length) return { type:'move', r:bot.r, c:bot.c };
-    const scored = validMoves.map(m=> ({ m, d: distanceToCenter(m.r, m.c, state.blockedEdges) }));
-    scored.sort((a,b)=> a.d-b.d);
-    const randomness = cfg.random;
-    let choice;
-    if(scored.length>1 && Math.random()<randomness){
-      choice = scored[Math.floor(Math.random()*scored.length)];
-    } else {
-      choice = scored[0];
+    const isHunterBot = state.ruleset==='hunter' && bot.id!==0;
+    if(isHunterBot) profile.wallChance=Math.max(profile.wallChance,.85);
+    const oppIdx = isHunterBot ? 0 : otherPlayerClosestToCenter(idx);
+    if(bot.wallsLeft>0&&oppIdx!=null){
+      const myDist=distanceToCenter(bot.r,bot.c,state.blockedEdges),oppDist=distanceToCenter(state.players[oppIdx].r,state.players[oppIdx].c,state.blockedEdges);
+      if((isHunterBot||oppDist<=myDist+1)&&Math.random()<profile.wallChance){ const w=findBestBlockingWall(oppIdx,oppDist); if(w)return {type:'wall',r:w.r,c:w.c,orientation:w.orientation}; }
     }
-    return { type:'move', r:choice.m.r, c:choice.m.c };
+    const moves=state.validMoves; if(!moves.length)return {type:'move',r:bot.r,c:bot.c};
+    const scored=moves.map(m=>({m,score:scoreBotMove(idx,m,profile.personality)})).sort((a,b)=>b.score-a.score);
+    const choice=Math.random()<profile.randomness?scored[Math.floor(Math.random()*Math.min(3,scored.length))]:scored[0];
+    return {type:'move',r:choice.m.r,c:choice.m.c};
   }
   function scheduleBotTurnIfNeeded(){
     if(!state || state.winner) return;
@@ -1693,7 +1734,8 @@
     state.resultTag = resultTag || null;
     const winnerTeam = teamOf(p.id);
     const wallsStart = p.wallsStart;
-    const wallsUsedByWinner = wallsStart - p.wallsLeft;
+    const wallsUsedByWinner = Math.max(0, wallsStart - p.wallsLeft);
+    if(state.campaign){ state.campaignXPReward = awardCampaignXP(state.campaignLevel, p.id===0); }
     stopThinking();
     hideEmoteBar();
     let fresh = [];
@@ -1766,6 +1808,7 @@
     state.moveCount = (state.moveCount||0) + 1;
     maybePickUpPower(p);
     if(checkWinAfterMove(p)){
+      state.winner = p;
       render(idx);
       finishGame(p);
       return;
@@ -1809,6 +1852,15 @@
     state.moveCount = (state.moveCount||0) + 1;
     playWallSound();
     vibrate(18);
+    if(state.ruleset==='hill' && isHillCell(cp.r,cp.c)){
+      cp.hillTurns = (cp.hillTurns||0) + 1;
+      if(cp.hillTurns>=HILL_TARGET){
+        state.winner = cp;
+        render();
+        finishGame(cp);
+        return;
+      }
+    }
     advanceTurn();
     maybeSpawnPower();
     checkHunterTimeout();
@@ -1823,10 +1875,12 @@
   }
   function startTurnTimer(keep){
     clearTurnTimer();
-    if(!state || state.ruleset!=='blitz' || state.winner) return;
+    if(!state || state.winner) return;
+    const seconds = state.turnTimeSeconds>0 ? state.turnTimeSeconds : (state.isCustomLevel ? 0 : (state.ruleset==='blitz' ? BLITZ_SECONDS : 0));
+    if(seconds<=0) return;
     const cp = state.players[state.currentPlayerIndex];
     if(cp && cp.isCPU) return;
-    if(!(keep && state.turnTimeLeft>0)) state.turnTimeLeft = BLITZ_SECONDS;
+    if(!(keep && state.turnTimeLeft>0)) state.turnTimeLeft = seconds;
     turnTimerBadge.classList.remove('hidden');
     turnTimerBadge.classList.toggle('low', state.turnTimeLeft<=5);
     turnTimerBadge.textContent = `⏱️ ${state.turnTimeLeft}s`;
@@ -1844,7 +1898,7 @@
     if(!state || state.winner) return;
     const idx = state.currentPlayerIndex;
     const moves = state.validMoves;
-    if(!moves.length) return;
+    if(!moves.length){ advanceTurn(); render(); return; }
     const scored = moves.map(m=> ({ m, d: distanceToCenter(m.r, m.c, state.blockedEdges) }));
     scored.sort((a,b)=> a.d-b.d);
     performMove(scored[0].m.r, scored[0].m.c);
@@ -1955,7 +2009,7 @@
     movesEl.innerHTML = movesHTML;
 
     let wallsHTML = '';
-    const fogCenter = (state.ruleset==='fog' && activePlayer) ? activePlayer : null;
+    const fogCenter = (state.ruleset==='fog' && activePlayer) ? (activePlayer.isCPU ? (state.players.find(pl=> !pl.isCPU) || activePlayer) : activePlayer) : null;
     for(const w of state.walls){
       if(fogCenter){
         const dist = Math.max(Math.abs(w.r-fogCenter.r), Math.abs(w.c-fogCenter.c));
@@ -1998,10 +2052,10 @@
     renderEmotes();
   }
   function updateHunterBadge(){
-    if(!state || state.ruleset!=='hunter' || state.winner){
-      if(!state || state.ruleset!=='blitz') turnTimerBadge.classList.add('hidden');
-      return;
-    }
+    // Sólo maneja el contador del modo Cazador. El reloj de turno (Contrarreloj / niveles con
+    // tiempo) administra su propio badge en startTurnTimer/clearTurnTimer, así que acá no lo tocamos.
+    if(!state || state.ruleset!=='hunter' || state.winner) return;
+    if(turnTimerInterval) return; // hay un reloj de turno corriendo: tiene prioridad sobre el badge
     const remaining = Math.max(0, state.hunterTurnLimit - (state.moveCount||0));
     turnTimerBadge.classList.remove('hidden');
     turnTimerBadge.classList.toggle('low', remaining<=5);
@@ -2036,8 +2090,8 @@
     playersListEl.innerHTML = state.players.map((p,i)=>{
       const active = (i===state.currentPlayerIndex && !state.winner);
       const bg = active ? hexToRgba(p.color,0.12) : 'transparent';
-      const diffN = p.difficulty==='hard' ? 3 : (p.difficulty==='normal' ? 2 : 1);
-      const cpuTag = p.isCPU ? `<span class="cpu-tag">IA <span class="stars-row">${starsHTML(diffN,3,10)}</span></span>` : '';
+      const diffN = p.difficulty==='expert' ? 4 : (p.difficulty==='hard' ? 3 : (p.difficulty==='normal' ? 2 : 1));
+      const cpuTag = p.isCPU ? `<span class="cpu-tag">IA <span class="stars-row">${starsHTML(diffN,diffN===4?4:3,10)}</span></span>` : '';
       const team = teamOf(p.id);
       const teamTag = team ? `<span class="cpu-tag">Equipo ${team}</span>` : '';
       const stunTag = p.stunned ? `<span class="cpu-tag"><img src="${emoteIconSrc('swirl')}" alt="">aturdido</span>` : '';
@@ -2074,7 +2128,13 @@
       winMsg.textContent = `Acumuló ${HILL_TARGET} turnos en la zona central. ¡Rey de la colina!`;
     } else {
       winTitle.textContent = team ? `¡Equipo ${team} ganó!` : `¡${p.name} ganó!`;
-      winMsg.textContent = team ? `${p.name} llegó primero al centro para su equipo.` : 'Podés jugar otra ronda con la misma configuración o cambiar los ajustes.';
+      if(state.campaign){
+        winMsg.textContent = p.id===0
+          ? `¡Ganaste la etapa ${state.campaignLevel}! +${state.campaignXPReward||0} XP. ${campaignProgressText()}`
+          : `${p.name} ganó esta etapa. Podés intentarlo de nuevo cuando quieras.`;
+      } else {
+        winMsg.textContent = team ? `${p.name} llegó primero al centro para su equipo.` : 'Podés jugar otra ronda con la misma configuración o cambiar los ajustes.';
+      }
     }
     // estrellas (desafío diario: según el par)
     if(state.isDaily){
@@ -2131,25 +2191,29 @@
     const names = options.names || loadPlayerNames();
     const isCpu = !!options.isCpu;
     const difficulty = options.difficulty || 'easy';
+    const customPlayers = Array.isArray(options.playerConfigs) && options.playerConfigs.length===playersCount ? options.playerConfigs : null;
+    const objective = (options.objective && Number.isInteger(options.objective.r) && Number.isInteger(options.objective.c))
+      ? { r:Math.max(0,Math.min(size-1,options.objective.r)), c:Math.max(0,Math.min(size-1,options.objective.c)) }
+      : { r:mid, c:mid };
 
     const players = order.map((slotKey,i)=>{
       const skin = pieceSkins[i] || PALETTE[i];
-      const isCPU = isCpu && i===1;
+      const isCPU = customPlayers ? !!customPlayers[i].isCPU : (isCpu && i===1);
       let walls = wallsEach;
       if(ruleset==='hunter' && !isDaily){
         walls = (i===0) ? Math.max(1, Math.floor(wallsEach/2)) : (wallsEach + 2);
       }
       return {
         id: i,
-        name: isCPU ? 'CPU' : ((names[i] && names[i].trim()) ? names[i].trim() : PALETTE[i].name),
+        name: isCPU ? (options.campaignRival || 'CPU') : ((names[i] && names[i].trim()) ? names[i].trim() : PALETTE[i].name),
         color: skin.color,
         shape: skin.shape,
-        r: slots[slotKey].r,
-        c: slots[slotKey].c,
-        wallsLeft: walls,
-        wallsStart: walls,
+        r: customPlayers ? Math.max(0,Math.min(size-1,+customPlayers[i].r||0)) : slots[slotKey].r,
+        c: customPlayers ? Math.max(0,Math.min(size-1,+customPlayers[i].c||0)) : slots[slotKey].c,
+        wallsLeft: customPlayers ? Math.max(0,+customPlayers[i].walls||0) : walls,
+        wallsStart: customPlayers ? Math.max(0,+customPlayers[i].walls||0) : walls,
         isCPU: isCPU,
-        difficulty: difficulty,
+        difficulty: customPlayers ? (customPlayers[i].difficulty||'easy') : difficulty,
         stunned: false,
         hillTurns: 0,
       };
@@ -2157,7 +2221,8 @@
 
     state = {
       size,
-      center: { r:mid, c:mid },
+      center: objective,
+      objective,
       players,
       currentPlayerIndex: 0,
       occupied: Array.from({length:size-1}, ()=>Array(size-1).fill(null)),
@@ -2165,7 +2230,7 @@
       walls: [],
       winner: null,
       validMoves: [],
-      isCpuGame: isCpu,
+      isCpuGame: isCpu || !!(customPlayers && customPlayers.some(p=> p.isCPU)),
       ruleset,
       moveCount: 0,
       powerUp: null,
@@ -2174,6 +2239,15 @@
       dailyPar: null,
       hunterTurnLimit: ruleset==='hunter' ? size*HUNTER_TURNS_PER_SIZE : null,
       resultTag: null,
+      campaign: !!options.campaign,
+      campaignLevel: options.campaignLevel || null,
+      campaignRival: options.campaignRival || null,
+      campaignPersonality: options.campaignPersonality || null,
+      campaignXPReward: 0,
+      presetWalls: Array.isArray(options.presetWalls) ? options.presetWalls : null,
+      isCustomLevel: !!options.isCustomLevel,
+      turnTimeSeconds: Math.max(0, +options.turnTimeSeconds || 0),
+      playerConfigs: customPlayers ? customPlayers.map(p=> Object.assign({}, p)) : null,
     };
     mode = 'move';
 
@@ -2228,7 +2302,7 @@
   function finishWallDrag(){
     if(!dragging) return;
     dragging = false;
-    if(previewSlot && previewSlot.valid){
+    if(mode==='wall' && previewSlot && previewSlot.valid){
       commitWall(previewSlot.r, previewSlot.c, previewSlot.orientation);
     }
     hideWallPreview();
@@ -2323,6 +2397,8 @@
       playersFieldset.classList.toggle('hidden', m==='cpu');
     }
     renderNameInputs(currentPlayersCount(), m==='cpu');
+    refreshCustomLevelSelect();
+    syncModeButton();
   }
   rulesetSelect.addEventListener('change', updateMenuVisibility);
   document.getElementById('modeGroup').addEventListener('change', updateMenuVisibility);
@@ -2382,9 +2458,322 @@
     EMOTE_ICON_IDS.forEach(id=> urls.push('emotes/icons/'+id+'.png'));
     FRAME_IDS.filter(f=> f!=='none').forEach(f=> urls.push('emotes/frames/'+f+'.png'));
     for(let m=1;m<=9;m++) urls.push('medals/m'+m+'.png');
+    modeAssetUrls().forEach(u=> urls.push(u));
     preloaded = urls.map(u=>{ const im = new Image(); im.src = ASSET + u; return im; });
     try{ if(document.fonts && document.fonts.load) document.fonts.load('16px "Kenney Future Narrow"'); }catch(e){}
   }
+
+  function blankCampaign(){ return { xp:0, unlockedLevel:1, completed:[], wins:0, losses:0 }; }
+
+  function loadCampaign(){
+    const base=blankCampaign();
+    try{
+      const raw=localStorage.getItem('quoridor_campaign');
+      if(raw){ const d=JSON.parse(raw)||{}; base.xp=+d.xp||0; base.unlockedLevel=Math.max(1,Math.min(CAMPAIGN_LEVELS.length,+d.unlockedLevel||1)); base.completed=Array.isArray(d.completed)?d.completed:[]; base.wins=+d.wins||0; base.losses=+d.losses||0; }
+    }catch(e){}
+    return base;
+  }
+
+  function saveCampaign(){ try{ localStorage.setItem('quoridor_campaign',JSON.stringify(campaignData)); }catch(e){} }
+
+  function campaignRank(){ let rank=CAMPAIGN_RANKS[0]; for(const r of CAMPAIGN_RANKS){ if(campaignData.xp>=r.min) rank=r; } return rank; }
+
+  function campaignNextRank(){ for(const r of CAMPAIGN_RANKS){ if(campaignData.xp<r.min) return r; } return null; }
+
+  function campaignLevelUnlocked(n){ return n<=campaignData.unlockedLevel; }
+
+  function campaignSkinColorUnlocked(color){
+    for(const [lvl,c] of Object.entries(CAMPAIGN_SKIN_UNLOCKS)){
+      if(c.color===color) return campaignData.completed.includes(+lvl);
+    }
+    return true;
+  }
+
+  function campaignShapeUnlocked(shape){
+    if(PALETTE.some(p=> p.shape===shape)) return true;
+    for(const [lvl,sh] of Object.entries(CAMPAIGN_SHAPE_UNLOCKS)){ if(sh===shape && campaignData.completed.includes(+lvl)) return true; }
+    return !Object.values(CAMPAIGN_SHAPE_UNLOCKS).includes(shape);
+  }
+
+  function awardCampaignXP(level, won){
+    if(!state || !state.campaign) return 0;
+    const lvl=CAMPAIGN_LEVELS.find(x=>x.id===level);
+    if(!lvl) return 0;
+    if(won){
+      const first=campaignData.completed.indexOf(level)===-1;
+      if(first){ campaignData.completed.push(level); campaignData.xp+=lvl.xp; }
+      campaignData.wins+=1;
+      if(level>=campaignData.unlockedLevel) campaignData.unlockedLevel=Math.min(CAMPAIGN_LEVELS.length,level+1);
+      saveCampaign();
+      return first ? lvl.xp : 0;
+    }
+    campaignData.losses+=1; saveCampaign(); return 0;
+  }
+
+  function campaignProgressText(){
+    const rank=campaignRank(), next=campaignNextRank();
+    return `${rank.name} · ${campaignData.xp} XP${next?` · ${next.min-campaignData.xp} XP para ${next.name}`:' · rango máximo'}`;
+  }
+
+  function startCampaignLevel(level){
+    const names=loadPlayerNames();
+    initGame(2,level.size,{isCpu:true,difficulty:level.difficulty,names,ruleset:'classic',campaign:true,campaignLevel:level.id,campaignRival:level.rival,campaignPersonality:level.personality});
+    menuScreen.classList.add('hidden'); gameScreen.classList.remove('hidden');
+    setTimeout(()=>{ hintLine.textContent=`${level.rival}: ${level.intro}`; },0);
+  }
+
+  function scoreBotMove(botIdx,m,personality){
+    const bot=state.players[botIdx], myAfter=distanceToCenter(m.r,m.c,state.blockedEdges);
+    let score=-myAfter*10, oppIdx=otherPlayerClosestToCenter(botIdx);
+    if(oppIdx!=null){ const oppDist=distanceToCenter(state.players[oppIdx].r,state.players[oppIdx].c,state.blockedEdges);
+      if(personality==='aggressive')score+=(oppDist-myAfter)*1.8;
+      if(personality==='defensive')score+=oppDist*0.25;
+      if(personality==='speed'&&myAfter===0)score+=1000;
+      if(personality==='strategist')score+=(oppDist-myAfter)*0.9;
+    }
+    if(personality==='defensive')score+=distanceToCenter(bot.r,bot.c,state.blockedEdges)-myAfter;
+    return score;
+  }
+
+  function refreshCustomLevelSelect(){
+    const isMaze = currentRuleset()==='maze';
+    customLevelFieldset.classList.toggle('hidden', !isMaze);
+    if(!isMaze) return;
+    const previous = customLevelSelect.value;
+    const list = loadCustomLevels();
+    customLevelSelect.innerHTML = '<option value="random">🎲 Paredes al azar</option>' +
+      list.map((lvl,i)=> `<option value="${i}">${escapeHtml(lvl.name)} (${lvl.size}×${lvl.size})</option>`).join('');
+    customLevelSelect.value = (previous!=='random' && list[+previous]) ? previous : 'random';
+  }
+
+  function defaultEditorPlayers(size,count){
+    const mid=(size-1)/2;
+    const slots=[{r:0,c:mid},{r:size-1,c:mid},{r:mid,c:0},{r:mid,c:size-1}];
+    return slots.slice(0,count).map(p=>({r:p.r,c:p.c,walls:wallsPerPlayer(size,count),isCPU:false,difficulty:'easy'}));
+  }
+
+  function editorPlayerConfigHTML(){
+    let html='';
+    editorState.players.forEach((p,i)=>{
+      html += '<div class="editor-player-card"><div class="editor-player-title"><strong>Jugador '+(i+1)+'</strong></div>';
+      html += '<div class="editor-fields-4">';
+      html += '<label>Fila <input type="number" min="1" max="'+editorState.size+'" data-player="'+i+'" data-field="r" value="'+(p.r+1)+'"></label>';
+      html += '<label>Col. <input type="number" min="1" max="'+editorState.size+'" data-player="'+i+'" data-field="c" value="'+(p.c+1)+'"></label>';
+      html += '<label>Paredes <input type="number" min="0" max="50" data-player="'+i+'" data-field="walls" value="'+p.walls+'"></label>';
+      html += '<label>Control<select class="select-field" data-player="'+i+'" data-field="control"><option value="local" '+(!p.isCPU?'selected':'')+'>👤 Local</option><option value="cpu" '+(p.isCPU?'selected':'')+'>🤖 IA</option></select></label></div>';
+      html += '<label class="editor-difficulty '+(p.isCPU?'':'hidden')+'">Dificultad IA<select class="select-field" data-player="'+i+'" data-field="difficulty">';
+      html += '<option value="easy" '+(p.difficulty==='easy'?'selected':'')+'>Fácil</option><option value="normal" '+(p.difficulty==='normal'?'selected':'')+'>Normal</option><option value="hard" '+(p.difficulty==='hard'?'selected':'')+'>Difícil</option><option value="expert" '+(p.difficulty==='expert'?'selected':'')+'>Experto</option></select></label></div>';
+    });
+    return html;
+  }
+
+  function syncEditorControls(){
+    if(!editorState) return;
+    editorPlayersCount.value=String(editorState.players.length);
+    editorTurnTime.value=String(editorState.turnTime||0);
+    editorRuleset.value=editorState.ruleset||'classic';
+    document.querySelectorAll('input[name="editorObjective"]').forEach(r=>r.checked=r.value===editorState.objective.mode);
+    editorObjectiveRow.value=String(editorState.objective.r+1);
+    editorObjectiveCol.value=String(editorState.objective.c+1);
+    editorObjectiveCoords.classList.toggle('hidden',editorState.objective.mode!=='custom');
+    editorPlayersConfig.innerHTML=editorPlayerConfigHTML();
+    renderEditor();
+  }
+
+  function editorApplyObjective(){
+    const modeValue=document.querySelector('input[name="editorObjective"]:checked')?.value||'center';
+    editorState.objective.mode=modeValue;
+    if(modeValue==='center'){
+      editorState.objective.r=Math.floor((editorState.size-1)/2);
+      editorState.objective.c=Math.floor((editorState.size-1)/2);
+    }else{
+      editorState.objective.r=Math.max(0,Math.min(editorState.size-1,(+editorObjectiveRow.value||1)-1));
+      editorState.objective.c=Math.max(0,Math.min(editorState.size-1,(+editorObjectiveCol.value||1)-1));
+    }
+    syncEditorControls();
+  }
+
+  function renderCampaign(){
+    const rank = campaignRank(), next = campaignNextRank();
+    campaignRankLine.textContent = `${rank.name} · ${campaignData.xp} XP · ${campaignData.wins} victorias`;
+    const prev = rank.min, max = next ? next.min : Math.max(rank.min+1, campaignData.xp);
+    campaignProgressFill.style.width = (next ? Math.max(0, Math.min(100, ((campaignData.xp-prev)/(max-prev))*100)) : 100) + '%';
+    campaignNextLine.textContent = next ? `${next.min-campaignData.xp} XP para rango ${next.name}` : 'Rango máximo alcanzado';
+    const starsByDiff = { easy:1, normal:2, hard:3, expert:4 };
+    campaignLevelsEl.innerHTML = CAMPAIGN_LEVELS.map(l=>{
+      const done = campaignData.completed.includes(l.id), locked = !campaignLevelUnlocked(l.id);
+      const badge = done ? `<img class="lvl-medal" src="${medalSrc(((l.id-1)%9)+1)}" alt="Completada">` : (locked ? '🔒' : l.id);
+      return `<button type="button" class="campaign-level ${done?'done':''} ${locked?'locked':''}" data-level="${l.id}" ${locked?'disabled':''}>
+        <span class="campaign-level-num">${badge}</span>
+        <span class="campaign-level-main"><strong>${escapeHtml(l.name)}</strong><small>vs. ${escapeHtml(l.rival)} · ${l.size}×${l.size} <span class="stars-row">${starsHTML(starsByDiff[l.difficulty]||1,4,10)}</span></small></span>
+        <span class="campaign-level-xp">+${l.xp} XP</span>
+      </button>`;
+    }).join('');
+  }
+  campaignBtn.addEventListener('click', ()=>{ renderCampaign(); openOverlay('campaign'); });
+  closeCampaignBtn.addEventListener('click', ()=> closeOverlay('campaign'));
+  campaignLevelsEl.addEventListener('click', e=>{
+    const btn = e.target.closest('.campaign-level'); if(!btn || btn.disabled) return;
+    const level = CAMPAIGN_LEVELS.find(x=> x.id===+btn.dataset.level); if(!level) return;
+    closeOverlay('campaign'); startCampaignLevel(level);
+  });
+
+  // ---------- selector de modos: ventana modal en cuadrícula ----------
+  // DATOS: qué recursos gráficos usa cada modo. Nombre, reglas y textos salen de RULESETS (única fuente de verdad).
+  // frame/frameOn = globo del pack de emotes (normal / seleccionado), medal = medalla que aparece al ganar en ese modo.
+  const MODE_CATALOG = [
+    { key:'classic', icon:'circle',       frame:'f1', frameOn:'f2', medal:1, level:1 },
+    { key:'fog',     icon:'cloud',        frame:'f5', frameOn:'f6', medal:2, level:2 },
+    { key:'teams',   icon:'hearts',       frame:'f3', frameOn:'f4', medal:3, level:2 },
+    { key:'party',   icon:'music',        frame:'f7', frameOn:'f7', medal:4, level:2 },
+    { key:'maze',    icon:'swirl',        frame:'f1', frameOn:'f2', medal:5, level:2 },
+    { key:'blitz',   icon:'exclamations', frame:'f3', frameOn:'f4', medal:6, level:3 },
+    { key:'mirror',  icon:'dots2',        frame:'f1', frameOn:'f2', medal:7, level:2 },
+    { key:'hill',    icon:'star',         frame:'f3', frameOn:'f4', medal:8, level:2 },
+    { key:'hunter',  icon:'anger',        frame:'f7', frameOn:'f7', medal:9, level:3 },
+  ];
+  const MODE_BY_KEY = {};
+  MODE_CATALOG.forEach(m=>{ MODE_BY_KEY[m.key] = m; });
+  function modeAssetUrls(){
+    const urls = ['ui/check-on.png','ui/check-off.png','ui/star.png','ui/star-off.png'];
+    MODE_CATALOG.forEach(m=>{
+      urls.push('emotes/icons/'+m.icon+'.png', 'emotes/frames/'+m.frame+'.png', 'emotes/frames/'+m.frameOn+'.png', 'medals/m'+m.medal+'.png');
+    });
+    return urls;
+  }
+  function syncModeButton(){ modePicker.syncTrigger(); }
+
+  // COMPONENTE: los listeners se registran una sola vez (build) y las tarjetas se construyen una sola vez,
+  // así abrir/cerrar la ventana no crea ni acumula nodos ni handlers. Sólo se animan transform y opacity.
+  const modePicker = (function(){
+    const COLS = 3, CLOSE_MS = 230;
+    let built = false, pending = 'classic', closeTimer = null, returnFocusTo = null, lastTriggerKey = null;
+    const cardEls = [];
+
+    function rs(key){ return RULESETS[key] || RULESETS.classic; }
+    function won(key){
+      if(key==='classic') return totalWins(statsData) > 0;
+      return ((statsData.modeWins && statsData.modeWins[key]) || 0) > 0;
+    }
+    function plateHTML(m){
+      return '<span class="mode-plate">'
+        + '<img class="plate-frame plate-off" src="'+frameSrc(m.frame)+'" alt="" decoding="async">'
+        + '<img class="plate-frame plate-on" src="'+frameSrc(m.frameOn)+'" alt="" decoding="async">'
+        + '<img class="plate-icon" src="'+emoteIconSrc(m.icon)+'" alt="" decoding="async"></span>';
+    }
+    function build(){
+      if(built) return;
+      built = true;
+      modesGrid.innerHTML = MODE_CATALOG.map((m,i)=>
+        '<button type="button" class="mode-card" role="radio" aria-checked="false" tabindex="-1" data-mode="'+m.key+'" style="--i:'+i+'">'
+        + '<img class="mc-check" src="'+ASSET+'ui/check-on.png" alt="" decoding="async">'
+        + '<img class="mc-medal" src="'+medalSrc(m.medal)+'" alt="Ganado" decoding="async">'
+        + plateHTML(m)
+        + '<span class="mc-name">'+escapeHtml(rs(m.key).label)+'</span>'
+        + '<span class="stars-row mc-stars" title="Complejidad">'+starsHTML(m.level,3,11)+'</span>'
+        + '</button>').join('');
+      modesGrid.querySelectorAll('.mode-card').forEach(el=> cardEls.push(el));
+      modesGrid.addEventListener('click', onGridClick);
+      modesGrid.addEventListener('keydown', onGridKey);
+      modesOverlay.addEventListener('click', e=>{ if(e.target===modesOverlay) close(); });
+      modesOverlay.addEventListener('keydown', e=>{ if(e.key==='Escape'){ e.stopPropagation(); close(); } });
+      modesConfirmBtn.addEventListener('click', confirm);
+      modesCloseBtn.addEventListener('click', close);
+      modeTriggerBtn.addEventListener('click', open);
+    }
+    function isAvailable(key){ return !!MODE_BY_KEY[key]; }   // punto de extensión: un modo puede quedar deshabilitado (aria-disabled)
+    function paint(){
+      cardEls.forEach(el=>{
+        const on = el.dataset.mode===pending, ok = isAvailable(el.dataset.mode);
+        el.setAttribute('aria-checked', on ? 'true' : 'false');
+        el.setAttribute('aria-disabled', ok ? 'false' : 'true');
+        el.tabIndex = on ? 0 : -1;
+      });
+      const m = MODE_BY_KEY[pending], r = rs(pending);
+      const players = r.forcePlayers ? r.forcePlayers+' jugadores' : '2 a 4 jugadores';
+      const who = r.forceLocal ? 'Solo local' : 'Local o vs. IA';
+      modeDetail.innerHTML = '<div class="md-inner">'
+        + '<div class="md-head"><span class="md-name">'+escapeHtml(r.label)+'</span><span class="stars-row" title="Complejidad">'+starsHTML(m.level,3,13)+'</span></div>'
+        + '<p class="md-hint">'+escapeHtml(r.hint)+'</p>'
+        + '<div class="md-tags"><span class="md-tag">'+players+'</span><span class="md-tag">'+who+'</span>'
+        + (won(pending) ? '<span class="md-tag won"><img src="'+medalSrc(m.medal)+'" alt="">Ganado</span>' : '')
+        + '</div></div>';
+    }
+    function select(key, focusCard){
+      if(!isAvailable(key)) return;
+      pending = key;
+      paint();
+      if(focusCard){ const el = cardEls.find(c=> c.dataset.mode===key); if(el) el.focus({ preventScroll:true }); }
+    }
+    function onGridClick(e){
+      const card = e.target.closest('.mode-card');
+      if(!card || card.getAttribute('aria-disabled')==='true') return;
+      const key = card.dataset.mode;
+      if(key===pending){ confirm(); return; }          // segundo toque sobre la misma tarjeta = elegir
+      select(key);
+      playToggleSound(true); vibrate(8);
+    }
+    function onGridKey(e){
+      const keys = MODE_CATALOG.map(m=> m.key), n = keys.length;
+      let i = keys.indexOf(pending);
+      if(e.key==='ArrowRight') i = (i+1) % n;
+      else if(e.key==='ArrowLeft') i = (i+n-1) % n;
+      else if(e.key==='ArrowDown') i = Math.min(n-1, i+COLS);
+      else if(e.key==='ArrowUp') i = Math.max(0, i-COLS);
+      else if(e.key==='Home') i = 0;
+      else if(e.key==='End') i = n-1;
+      else return;
+      e.preventDefault();
+      select(keys[i], true);
+    }
+    function open(){
+      build();
+      if(closeTimer){ clearTimeout(closeTimer); closeTimer = null; }
+      const wasClosed = modesOverlay.classList.contains('hidden');
+      if(wasClosed) returnFocusTo = document.activeElement;
+      pending = MODE_BY_KEY[currentRuleset()] ? currentRuleset() : 'classic';
+      cardEls.forEach(el=> el.classList.toggle('is-won', won(el.dataset.mode)));
+      paint();
+      if(wasClosed) openOverlay('modes');
+      modeTriggerBtn.setAttribute('aria-expanded','true');
+      const raf = window.requestAnimationFrame ? window.requestAnimationFrame.bind(window) : (fn=> setTimeout(fn,16));
+      raf(()=> raf(()=>{
+        modesOverlay.classList.add('show');
+        const sel = cardEls.find(el=> el.dataset.mode===pending);
+        if(sel) sel.focus({ preventScroll:true });
+      }));
+    }
+    function close(){
+      if(closeTimer || modesOverlay.classList.contains('hidden')) return;
+      modesOverlay.classList.remove('show');
+      modeTriggerBtn.setAttribute('aria-expanded','false');
+      closeTimer = setTimeout(()=>{
+        closeTimer = null;
+        closeOverlay('modes');
+        if(returnFocusTo && returnFocusTo.focus){ try{ returnFocusTo.focus({ preventScroll:true }); }catch(e){} }
+        returnFocusTo = null;
+      }, CLOSE_MS);
+    }
+    function confirm(){
+      if(closeTimer) return;
+      const key = pending;
+      if(isAvailable(key) && key!==currentRuleset()){
+        rulesetSelect.value = key;
+        rulesetSelect.dispatchEvent(new Event('change', { bubbles:true }));   // reutiliza toda la lógica existente del menú
+      }
+      close();
+    }
+    function syncTrigger(){
+      const key = MODE_BY_KEY[currentRuleset()] ? currentRuleset() : 'classic';
+      if(key!==lastTriggerKey){
+        lastTriggerKey = key;
+        modeTriggerPlate.innerHTML = plateHTML(MODE_BY_KEY[key]);
+        modeTriggerName.textContent = rs(key).label;
+      }
+      modeTriggerSub.textContent = 'Tocá para ver los '+MODE_CATALOG.length+' modos';
+    }
+    return { build, open, close, confirm, syncTrigger };
+  })();
 
   // ---------- tutorial ----------
   closeTutorialBtn.addEventListener('click', ()=> closeOverlay('tutorial'));
@@ -2511,11 +2900,16 @@
   // ---------- editor de niveles ----------
   let editorState = null;
   function editorReset(size){
-    editorState = {
+    const count=editorState&&editorState.players ? editorState.players.length : 2;
+    editorState={
       size,
-      occupied: Array.from({length:size-1}, ()=>Array(size-1).fill(null)),
-      walls: [],
+      objective:{r:Math.floor((size-1)/2),c:Math.floor((size-1)/2),mode:'center'},
+      players:defaultEditorPlayers(size,count),
+      turnTime:0,ruleset:'classic',
+      occupied:Array.from({length:size-1},()=>Array(size-1).fill(null)),
+      walls:[]
     };
+    syncEditorControls();
   }
   function editorCanPlaceWallSlot(r,c,orientation){
     const size = editorState.size;
@@ -2549,16 +2943,18 @@
     renderEditor();
   }
   function editorValidate(){
-    const size = editorState.size;
-    const mid = (size-1)/2;
-    const blockedSet = new Set();
-    editorState.walls.forEach(w=>{
-      wallEdges(w.r,w.c,w.orientation).forEach(e=> blockedSet.add(edgeKey(e[0],e[1],e[2],e[3])));
-    });
-    const corners = [[0,mid],[size-1,mid],[mid,0],[mid,size-1]];
-    for(const [r,c] of corners){
-      if(!hasPath(r,c,mid,mid,blockedSet,size)) return false;
+    const size=editorState.size,obj=editorState.objective,seen=new Set();
+    for(const p of editorState.players){
+      if(p.r<0||p.c<0||p.r>=size||p.c>=size) return false;
+      const key=p.r+','+p.c; if(seen.has(key)) return false; seen.add(key);
     }
+    if(obj.r<0||obj.c<0||obj.r>=size||obj.c>=size) return false;
+    const blockedSet=new Set();
+    editorState.walls.forEach(w=>wallEdges(w.r,w.c,w.orientation).forEach(e=>blockedSet.add(edgeKey(e[0],e[1],e[2],e[3]))));
+    for(const p of editorState.players) if(!hasPath(p.r,p.c,obj.r,obj.c,blockedSet,size)) return false;
+    if(editorState.players.some(p=>p.r===obj.r&&p.c===obj.c)) return false; // nadie puede empezar sobre el objetivo
+    if(editorState.ruleset==='teams'&&editorState.players.length!==4) return false;
+    if(editorState.ruleset==='mirror'&&editorState.players.length!==2) return false;
     return true;
   }
   function renderEditor(){
@@ -2572,8 +2968,13 @@
       gridHTML += `<line x1="${i*cs}" y1="0" x2="${i*cs}" y2="${BOARD_PX}" stroke="var(--line)" stroke-width="1"/>`;
       gridHTML += `<line x1="0" y1="${i*cs}" x2="${BOARD_PX}" y2="${i*cs}" stroke="var(--line)" stroke-width="1"/>`;
     }
-    const mid=(size-1)/2, ccx=(mid+0.5)*cs, ccy=(mid+0.5)*cs;
+    const obj=editorState.objective;
+    const ccx=(obj.c+0.5)*cs, ccy=(obj.r+0.5)*cs;
     gridHTML += `<circle cx="${ccx}" cy="${ccy}" r="15" fill="none" stroke="var(--accent)" stroke-width="3"/>`;
+    editorState.players.forEach((p,i)=>{
+      const px=(p.c+0.5)*cs,py=(p.r+0.5)*cs,color=PALETTE[i].color;
+      gridHTML += `<circle cx="${px}" cy="${py}" r="${cs*0.28}" fill="${color}" opacity=".9" stroke="var(--panel)" stroke-width="2"/><text x="${px}" y="${py+4}" text-anchor="middle" font-size="${cs*.24}" font-weight="700" fill="white">${i+1}</text>`;
+    });
     editorGridGroup.innerHTML = gridHTML;
     let wallsHTML = '';
     editorState.walls.forEach(w=>{
@@ -2632,24 +3033,26 @@
     } else if(btn.dataset.act==='load'){
       editorSizeSelect.value = String(lvl.size);
       editorReset(lvl.size);
-      lvl.walls.forEach(w=>{ editorState.occupied[w.r][w.c]=w.orientation; editorState.walls.push(w); });
-      renderEditor();
+      editorState.objective = lvl.objective ? Object.assign({}, lvl.objective) : editorState.objective;
+      editorState.turnTime = +lvl.turnTime || 0;
+      editorState.ruleset = lvl.ruleset || 'classic';
+      if(Array.isArray(lvl.players) && lvl.players.length>=2) editorState.players = lvl.players.slice(0,4).map(p=> Object.assign({}, p));
+      (lvl.walls||[]).forEach(w=>{ editorState.occupied[w.r][w.c]=w.orientation; editorState.walls.push(Object.assign({}, w)); });
+      syncEditorControls();
       editorFeedback.textContent = `Cargaste "${lvl.name}". Podés seguir editando.`;
     } else if(btn.dataset.act==='play'){
       startCustomLevelMatch(lvl);
     }
   });
   function startCustomLevelMatch(lvl){
-    initGame(2, lvl.size, { presetWalls: lvl.walls, isCustomLevel:true, ruleset:'maze' });
-    editorScreen.classList.add('hidden');
-    menuScreen.classList.add('hidden');
-    gameScreen.classList.remove('hidden');
+    const count=Array.isArray(lvl.players)?lvl.players.length:2;
+    initGame(count,lvl.size,{presetWalls:lvl.walls||[],isCustomLevel:true,ruleset:lvl.ruleset||'classic',objective:lvl.objective,turnTimeSeconds:+lvl.turnTime||0,playerConfigs:lvl.players});
+    editorScreen.classList.add('hidden');menuScreen.classList.add('hidden');gameScreen.classList.remove('hidden');
   }
   editorSizeSelect.addEventListener('change', ()=>{ editorReset(+editorSizeSelect.value); renderEditor(); });
   editorClearBtn.addEventListener('click', ()=>{ editorReset(editorState.size); renderEditor(); editorFeedback.textContent='Tablero limpio.'; });
   editorSaveBtn.addEventListener('click', ()=>{
-    if(!editorState.walls.length){ editorFeedback.textContent='Agregá al menos una pared antes de guardar.'; return; }
-    if(!editorValidate()){ editorFeedback.textContent='Este diseño deja a algún jugador sin camino posible al centro. Ajustalo antes de guardar.'; return; }
+    if(!editorValidate()){ editorFeedback.textContent='El diseño no es válido: revisá las posiciones de los jugadores, el objetivo, que todos tengan camino posible o la cantidad de jugadores que pide el modo elegido.'; return; }
     levelNameInput.value = 'Mi nivel';
     openOverlay('namePrompt');                       // modal propio: prompt() no es confiable en un WebView
     setTimeout(()=>{ try{ levelNameInput.focus(); levelNameInput.select(); }catch(e){} }, 60);
@@ -2658,7 +3061,9 @@
     const name = (levelNameInput.value || '').trim();
     if(!name){ levelNameInput.focus(); return; }
     const list = loadCustomLevels();
-    list.push({ name: name.slice(0,24), size: editorState.size, walls: editorState.walls.map(w=>({r:w.r,c:w.c,orientation:w.orientation})) });
+    list.push({ name: name.slice(0,24), size: editorState.size, objective: Object.assign({}, editorState.objective), turnTime: editorState.turnTime||0, ruleset: editorState.ruleset||'classic',
+      players: editorState.players.map(p=>({ r:p.r, c:p.c, walls:p.walls, isCPU:!!p.isCPU, difficulty:p.difficulty||'easy' })),
+      walls: editorState.walls.map(w=>({r:w.r,c:w.c,orientation:w.orientation})) });
     saveCustomLevels(list);
     renderEditorLevelsList();
     editorFeedback.textContent = 'Nivel guardado.';
@@ -2668,11 +3073,18 @@
   levelNameCancelBtn.addEventListener('click', ()=> closeOverlay('namePrompt'));
   levelNameInput.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); confirmLevelName(); } });
   editorPlayBtn.addEventListener('click', ()=>{
-    if(editorState.walls.length && !editorValidate()){
-      editorFeedback.textContent='Este diseño deja a algún jugador sin camino posible al centro. Ajustalo antes de jugar.';
+    if(!editorValidate()){
+      editorFeedback.textContent='El diseño no es válido: revisá las posiciones de los jugadores, el objetivo, que todos tengan camino posible o la cantidad de jugadores que pide el modo elegido.';
       return;
     }
-    startCustomLevelMatch({ size: editorState.size, walls: editorState.walls });
+    startCustomLevelMatch({
+      size: editorState.size,
+      objective: { r: editorState.objective.r, c: editorState.objective.c },
+      turnTime: editorState.turnTime||0,
+      ruleset: editorState.ruleset||'classic',
+      players: editorState.players.map(p=>({ r:p.r, c:p.c, walls:p.walls, isCPU:!!p.isCPU, difficulty:p.difficulty||'easy' })),
+      walls: editorState.walls.map(w=>({ r:w.r, c:w.c, orientation:w.orientation })),
+    });
   });
   editorLinkBtn.addEventListener('click', ()=>{
     closeOverlay('more');
@@ -2687,6 +3099,33 @@
     menuScreen.classList.remove('hidden');
   });
 
+  editorPlayersCount.addEventListener('change', ()=>{
+    const count = Math.max(2, Math.min(4, +editorPlayersCount.value || 2));
+    const old = editorState.players || [], next = defaultEditorPlayers(editorState.size, count);
+    next.forEach((p,i)=>{ if(old[i]) Object.assign(p, old[i]); p.r = Math.max(0,Math.min(editorState.size-1,+p.r||0)); p.c = Math.max(0,Math.min(editorState.size-1,+p.c||0)); });
+    editorState.players = next; syncEditorControls();
+  });
+  editorTurnTime.addEventListener('change', ()=>{ editorState.turnTime = +editorTurnTime.value || 0; });
+  editorRuleset.addEventListener('change', ()=>{ editorState.ruleset = editorRuleset.value; });
+  document.querySelectorAll('input[name="editorObjective"]').forEach(r=> r.addEventListener('change', editorApplyObjective));
+  editorObjectiveRow.addEventListener('change', editorApplyObjective);
+  editorObjectiveCol.addEventListener('change', editorApplyObjective);
+  editorPlayersConfig.addEventListener('change', e=>{
+    const el = e.target.closest('[data-player]'); if(!el) return;
+    const p = editorState.players[+el.dataset.player]; if(!p) return;
+    if(el.dataset.field==='control'){ p.isCPU = el.value==='cpu'; syncEditorControls(); }
+    if(el.dataset.field==='difficulty') p.difficulty = el.value;
+  });
+  editorPlayersConfig.addEventListener('input', e=>{
+    const el = e.target.closest('[data-player]'); if(!el) return;
+    const p = editorState.players[+el.dataset.player]; if(!p) return;
+    const v = +el.value;
+    if(el.dataset.field==='r') p.r = Math.max(0, Math.min(editorState.size-1, (v||1)-1));
+    if(el.dataset.field==='c') p.c = Math.max(0, Math.min(editorState.size-1, (v||1)-1));
+    if(el.dataset.field==='walls') p.walls = Math.max(0, Math.min(50, v||0));
+    if(el.dataset.field==='r' || el.dataset.field==='c') renderEditor();
+  });
+
   // ---------- menú & navegación ----------
   function goToMenu(){
     invalidateBotTimer();
@@ -2699,6 +3138,7 @@
     closeOverlay('pause');
     updateCoinUI(false);
     updateBadges();
+    refreshCustomLevelSelect();
   }
   pauseBtn.addEventListener('click', ()=>{ if(state) openOverlay('pause'); });
   resumeBtn.addEventListener('click', ()=> closeOverlay('pause'));
@@ -2713,6 +3153,9 @@
       difficulty: (state.players[1] && state.players[1].difficulty) || 'easy',
       names: loadPlayerNames(),
       ruleset: state.ruleset,
+      campaign: state.campaign, campaignLevel: state.campaignLevel, campaignRival: state.campaignRival, campaignPersonality: state.campaignPersonality,
+      presetWalls: state.presetWalls, isCustomLevel: state.isCustomLevel, objective: state.objective,
+      turnTimeSeconds: state.turnTimeSeconds, playerConfigs: state.playerConfigs,
     };
     const playersCount = state.players.length;
     const size = state.size;
@@ -2726,7 +3169,12 @@
     const m = currentMode();
     const isCpu = m==='cpu';
     const playersCount = currentPlayersCount();
-    const size = +document.querySelector('input[name="size"]:checked').value;
+    let size = +document.querySelector('input[name="size"]:checked').value;
+    let presetWalls = null, isCustomLevel = false;
+    if(ruleset==='maze' && customLevelSelect.value!=='random'){
+      const lvl = loadCustomLevels()[+customLevelSelect.value];
+      if(lvl){ size = lvl.size; presetWalls = lvl.walls; isCustomLevel = true; }
+    }
     const diffRadio = document.querySelector('input[name="difficulty"]:checked');
     const difficulty = diffRadio ? diffRadio.value : 'easy';
 
@@ -2737,9 +3185,9 @@
       if(inp){ names[i] = inp.value.trim(); }
     }
     savePlayerNames(names);
-    saveLastSetup({ playersCount, size, mode:m, difficulty, ruleset });
+    saveLastSetup({ playersCount, size: +document.querySelector('input[name="size"]:checked').value, mode:m, difficulty, ruleset });
 
-    initGame(playersCount, size, { isCpu, difficulty, names, ruleset });
+    initGame(playersCount, size, { isCpu, difficulty, names, ruleset, presetWalls, isCustomLevel });
     menuScreen.classList.add('hidden');
     gameScreen.classList.remove('hidden');
   });
@@ -2811,6 +3259,7 @@
     }
   })();
 
+  modePicker.build();
   updateMenuVisibility();
   updateBadges();
 
