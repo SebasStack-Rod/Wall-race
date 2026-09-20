@@ -79,6 +79,27 @@
       <select class="select-field" id="customLevelSelect">
         <option value="random">🎲 Paredes al azar</option>
       </select>
+      <div id="mazeRandomOptions">
+        <div class="segmented maze-density" id="mazeDensityGroup" role="radiogroup" aria-label="Densidad de paredes">
+          <input type="radio" name="mazeDensity" id="mdLigero" value="ligero"><label for="mdLigero">Ligero</label>
+          <input type="radio" name="mazeDensity" id="mdMedio" value="medio" checked><label for="mdMedio">Medio</label>
+          <input type="radio" name="mazeDensity" id="mdDenso" value="denso"><label for="mdDenso">Denso</label>
+          <input type="radio" name="mazeDensity" id="mdCaos" value="caos"><label for="mdCaos">Caos</label>
+        </div>
+        <p class="field-hint" id="mazeDensityHint"></p>
+        <label class="check-row"><input type="checkbox" id="mazeMineCheck"> <span>Incluir mis patrones <small id="mazeMineCount"></small></span></label>
+      </div>
+      <div class="maze-preview">
+        <svg id="mazeMinimap" viewBox="0 0 120 120" width="120" height="120" role="img" aria-label="Vista previa del mapa"></svg>
+        <div class="maze-preview-side">
+          <div class="maze-map-name" id="mazeMapName"></div>
+          <div class="maze-seed" id="mazeSeedText"></div>
+          <button type="button" class="kbtn grey small maze-dice" id="mazeDiceBtn" aria-label="Otro mapa" title="Otro mapa">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="8.2" cy="8.2" r="1.6" fill="currentColor"/><circle cx="15.8" cy="8.2" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><circle cx="8.2" cy="15.8" r="1.6" fill="currentColor"/><circle cx="15.8" cy="15.8" r="1.6" fill="currentColor"/></svg>
+            <span>Otro mapa</span>
+          </button>
+        </div>
+      </div>
       <p class="field-hint">Podés usar un nivel que hayas guardado en el editor. En ese caso se usa el tamaño del nivel.</p>
     </fieldset>
 
@@ -133,6 +154,14 @@
           <filter id="pieceShadow" x="-50%" y="-50%" width="200%" height="200%">
             <feDropShadow dx="0" dy="1.5" stdDeviation="1.4" flood-color="rgba(0,0,0,0.35)"/>
           </filter>
+          <!-- textura de piedra de las paredes del mapa (las de los jugadores llevan el color de su ficha) -->
+          <pattern id="stoneTex" width="16" height="16" patternUnits="userSpaceOnUse">
+            <rect width="16" height="16" fill="#8c877b"/>
+            <rect width="8" height="8" fill="#9b968a"/>
+            <rect x="8" y="8" width="8" height="8" fill="#797468"/>
+            <path d="M0 8H16M8 0V8M4 8V16M12 0V8" stroke="#57534a" stroke-width=".9" fill="none"/>
+            <circle cx="3" cy="3" r=".8" fill="#b5b0a3"/><circle cx="12" cy="12" r=".8" fill="#b5b0a3"/>
+          </pattern>
         </defs>
         <g id="gridGroup"></g>
         <g id="movesGroup"></g>
@@ -159,11 +188,13 @@
   <div class="modal-card accent-border" id="winCard">
     <h2 id="winTitle"></h2>
     <p id="winMsg"></p>
+    <p class="win-map hidden" id="winMapInfo"></p>
     <div class="win-stars hidden" id="winStars"></div>
     <div class="win-rewards" id="winRewards"></div>
     <div class="win-goal hidden" id="winGoal"></div>
     <div class="modal-actions">
       <button class="kbtn yellow big block" id="playAgainBtn">Jugar de nuevo</button>
+      <button class="kbtn green block hidden" id="repeatMapBtn">Repetir mapa</button>
       <button class="kbtn grey block" id="changeConfigBtn">Cambiar configuración</button>
     </div>
   </div>
@@ -194,7 +225,7 @@
 
 <div id="namePromptOverlay" class="overlay-backdrop hidden">
   <div class="modal-card" id="namePromptCard">
-    <h2>Nombre del nivel</h2>
+    <h2 id="namePromptTitle">Nombre del nivel</h2>
     <input type="text" class="name-input" id="levelNameInput" maxlength="24" placeholder="Mi nivel" aria-label="Nombre del nivel">
     <div class="modal-actions">
       <button class="kbtn green block" id="levelNameOkBtn">Guardar</button>
@@ -373,6 +404,7 @@
     </select>
     <button type="button" class="kbtn grey small" id="editorClearBtn">🗑️ Limpiar</button>
     <button type="button" class="kbtn green small" id="editorSaveBtn">💾 Guardar</button>
+    <button type="button" class="kbtn blue small" id="editorSavePatternBtn" title="Guarda sólo las paredes, para mezclarlas en el Laberinto">🧱 Guardar como patrón</button>
     <button type="button" class="kbtn yellow small" id="editorPlayBtn">▶️ Jugar este diseño</button>
   </div>
   <div class="editor-config-grid">
