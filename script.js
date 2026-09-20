@@ -70,6 +70,13 @@
   ];
 
   // ---------- modos de partida ----------
+  // Rey de la colina: turnos SEGUIDOS dentro de la zona según la cantidad de jugadores (con más rivales
+  // la zona se disputa más, así que alcanza con menos turnos) y empujones por jugador.
+  const HILL_TARGET = { 2:4, 3:3, 4:3 };
+  const HILL_TARGET_DEFAULT = 3;   // por si alguna vez se juega con otra cantidad de jugadores
+  const HILL_PUSHES = 2;
+  const HILL_MIN_ACCESSES = 2;      // la zona nunca puede quedar con menos accesos que estos
+  const HILL_TARGET_TEXT = Object.keys(HILL_TARGET).map(n=> `${n} jugadores: ${HILL_TARGET[n]} turnos`).join(' · ');
   const RULESETS = {
     classic: { label:'Clásico', hint:'Las reglas de siempre: movete y bloqueá con paredes hasta llegar al centro.' },
     fog:     { label:'Niebla de guerra', hint:'Sólo ves las paredes cercanas a quien juega en ese turno. Las lejanas siguen bloqueando aunque no se vean.', forcePlayers:null },
@@ -78,12 +85,11 @@
     maze:    { label:'Laberinto', hint:'El tablero arranca con paredes al azar ya colocadas (o con tu propio diseño del editor de niveles), garantizando que siempre haya camino.' },
     blitz:   { label:'Contrarreloj', hint:'Cada turno tiene 20 segundos. Si se acaba el tiempo, se juega un movimiento al azar y pasa el turno.' },
     mirror:  { label:'Espejo', hint:'Sólo para 2 jugadores. Cada pared que colocás aparece también reflejada en el punto opuesto del tablero.', forcePlayers:2 },
-    hill:    { label:'Rey de la colina', hint:'No alcanza con pisar el centro una vez: hay que acumular varios turnos parado en la zona central (no hace falta que sean seguidos).' },
+    hill:    { label:'Rey de la colina', hint:`No alcanza con pisar el centro: hay que terminar turnos SEGUIDOS dentro de la zona central (${HILL_TARGET_TEXT}). Si salís de la zona o te empujan, el conteo vuelve a 0. Cada jugador tiene ${HILL_PUSHES} empujones para sacar al rival, y no se puede cerrar la zona a menos de ${HILL_MIN_ACCESSES} accesos.` },
     hunter:  { label:'Cazador y fugitivo', hint:'El Jugador 1 es el fugitivo y gana si llega al centro. El resto son cazadores: no ganan llegando al centro, sólo bloqueando con paredes antes de que se acabe el límite de turnos.' },
   };
   const FOG_RADIUS = 2;
   const BLITZ_SECONDS = 20;
-  const HILL_TARGET = 3; // turnos (no necesariamente seguidos) que hay que acumular en la zona central
   const HUNTER_TURNS_PER_SIZE = 3; // límite de turnos totales = size * este valor
   const CAMPAIGN_LEVELS = [
     { id:1, name:'Primer duelo', rival:'Toto', personality:'speed', difficulty:'easy', size:5, xp:100, intro:'Toto todavía está aprendiendo. Aprovechá sus movimientos directos.' },
@@ -289,13 +295,6 @@
   const showMovesToggle = document.getElementById('showMovesToggle');
   const glassToggle = document.getElementById('glassToggle');
   const difficultyHint = document.getElementById('difficultyHint');
-  const editorPlayersCount = document.getElementById('editorPlayersCount');
-  const editorTurnTime = document.getElementById('editorTurnTime');
-  const editorRuleset = document.getElementById('editorRuleset');
-  const editorPlayersConfig = document.getElementById('editorPlayersConfig');
-  const editorObjectiveCoords = document.getElementById('editorObjectiveCoords');
-  const editorObjectiveRow = document.getElementById('editorObjectiveRow');
-  const editorObjectiveCol = document.getElementById('editorObjectiveCol');
 
   const customLevelFieldset = document.getElementById('customLevelFieldset');
   const customLevelSelect = document.getElementById('customLevelSelect');
@@ -433,6 +432,34 @@
     return Infinity;
   }
 
+  // BFS multiobjetivo: pasos hasta la casilla más cercana de `targets` (por defecto, toda la zona de la colina).
+  function distanceToHill(r,c,blockedSet,targets){
+    const goals = new Set((targets || hillCells()).map(t=> t.r+','+t.c));
+    if(goals.has(r+','+c)) return 0;
+    const visited = new Set([r+','+c]);
+    const queue = [[r,c,0]];
+    for(let head=0; head<queue.length; head++){
+      const [cr,cc,d] = queue[head];
+      for(const [dr,dc] of DIRS4){
+        const nr=cr+dr, nc=cc+dc;
+        if(nr<0||nc<0||nr>=state.size||nc>=state.size) continue;
+        const key = nr+','+nc;
+        if(visited.has(key)) continue;
+        if(isBlocked(cr,cc,nr,nc,blockedSet)) continue;
+        if(goals.has(key)) return d+1;
+        visited.add(key);
+        queue.push([nr,nc,d+1]);
+      }
+    }
+    return Infinity;
+  }
+  // Casillas de la zona que no ocupa ningún otro jugador (si están todas ocupadas, toda la zona).
+  function hillFreeTargets(excludeIdx){
+    const zone = hillCells();
+    const free = zone.filter(cell=> !state.players.some((pl,i)=> i!==excludeIdx && pl.r===cell.r && pl.c===cell.c));
+    return free.length ? free : zone;
+  }
+
   function wallEdges(r,c,orientation){
     if(orientation==='h'){
       return [[r,c,r+1,c],[r,c+1,r+1,c+1]];
@@ -465,7 +492,17 @@
   function mirrorSlot(r,c){ return { r: state.size-2-r, c: state.size-2-c }; }
   function evaluateWallForMode(r,c,orientation){
     const base = evaluateWallPlacement(r,c,orientation);
-    if(!base.valid || state.ruleset!=='mirror') return base;
+    if(!base.valid) return base;
+    if(state.ruleset==='hill'){
+      // a prueba de asedio: se rechaza la pared que deje la zona con menos de HILL_MIN_ACCESSES accesos
+      // (sólo si además la pared los reduce, así un tablero raro no queda sin poder poner ninguna)
+      const testSet = new Set(state.blockedEdges);
+      base.edges.forEach(e=> testSet.add(edgeKey(e[0],e[1],e[2],e[3])));
+      const after = hillAccessCount(testSet);
+      if(after < HILL_MIN_ACCESSES && after < hillAccessCount(state.blockedEdges)) return { valid:false, reason:'hillSiege' };
+      return base;
+    }
+    if(state.ruleset!=='mirror') return base;
     const m = mirrorSlot(r,c);
     if(m.r===r && m.c===c) return base; // cae en su propio reflejo, no hace falta espejo aparte
     if(!canPlaceWallSlot(m.r,m.c,orientation)) return { valid:false };
@@ -479,21 +516,74 @@
     return { valid:true, edges:base.edges, mirrorEdges:mEdges };
   }
 
-  // ---------- Modo Rey de la colina: zona central en forma de cruz ----------
-  function hillCells(){
-    const { r, c } = state.center;
-    return [ {r,c}, {r:r-1,c}, {r:r+1,c}, {r,c:c-1}, {r,c:c+1} ].filter(cell=>
-      cell.r>=0 && cell.c>=0 && cell.r<state.size && cell.c<state.size
-    );
+  // ---------- Modo Rey de la colina: zona central proporcional al tablero ----------
+  // La zona son las casillas a distancia Manhattan <= radio del centro: radio 1 (cruz de 5 casillas)
+  // hasta 9x9 y radio 2 (rombo de 13 casillas) en 11x11. Se calcula una vez por partida.
+  function hillRadius(){ return state.size >= 11 ? 2 : 1; }
+  function hillZone(){
+    if(state._hillZone) return state._hillZone;
+    const { r, c } = state.center, rad = hillRadius(), cells = [];
+    for(let dr=-rad; dr<=rad; dr++){
+      for(let dc=-rad; dc<=rad; dc++){
+        if(Math.abs(dr)+Math.abs(dc) > rad) continue;
+        const rr=r+dr, cc=c+dc;
+        if(rr<0 || cc<0 || rr>=state.size || cc>=state.size) continue;
+        cells.push({ r:rr, c:cc });
+      }
+    }
+    state._hillZone = { cells, keys: new Set(cells.map(cell=> cell.r+','+cell.c)) };
+    return state._hillZone;
   }
-  function isHillCell(r,c){ return hillCells().some(cell=> cell.r===r && cell.c===c); }
+  function hillCells(){ return hillZone().cells; }
+  function isHillCell(r,c){ return hillZone().keys.has(r+','+c); }
+  // Accesos de la zona = pasos libres (sin pared) entre una casilla de la zona y una casilla de afuera.
+  function hillAccessCount(blockedSet){
+    let n = 0;
+    hillCells().forEach(cell=>{
+      for(const [dr,dc] of DIRS4){
+        const nr=cell.r+dr, nc=cell.c+dc;
+        if(nr<0||nc<0||nr>=state.size||nc>=state.size) continue;
+        if(isHillCell(nr,nc)) continue;
+        if(!isBlocked(cell.r,cell.c,nr,nc,blockedSet)) n++;
+      }
+    });
+    return n;
+  }
+  // Quién "sostiene" la zona ahora: el único que está dentro, o el que lleva más turnos seguidos si hay varios.
+  // Devuelve null si nadie está dentro o si hay empate (entonces cada casilla se tiñe según su ocupante).
+  function hillHolderIndex(){
+    const inside = [];
+    state.players.forEach((pl,i)=>{ if(isHillCell(pl.r,pl.c)) inside.push({ i, t: pl.hillTurns||0 }); });
+    if(!inside.length) return null;
+    if(inside.length===1) return inside[0].i;
+    inside.sort((a,b)=> b.t-a.t);
+    return inside[0].t>inside[1].t ? inside[0].i : null;
+  }
+  // Arco de progreso alrededor de la ficha: fracción = turnos seguidos / objetivo. Pulsa cuando falta un turno.
+  function hillArcMarkup(p,cx,cy,cs){
+    const target = hillTargetTurns(), t = Math.min(p.hillTurns||0, target);
+    if(t<=0) return '';
+    const rad = cs*0.46, circ = 2*Math.PI*rad, w = Math.max(3, cs*0.06);
+    const urgent = t===target-1;
+    const rot = `transform="rotate(-90 ${cx} ${cy})"`;      // el arco arranca a las 12 en punto
+    return `<circle cx="${cx}" cy="${cy}" r="${rad}" fill="none" stroke="${p.color}" stroke-width="${w}" opacity="0.22" class="hill-arc-track"/>`
+      + `<circle cx="${cx}" cy="${cy}" r="${rad}" fill="none" stroke="${p.color}" stroke-width="${w}" stroke-linecap="round" stroke-dasharray="${(circ*t/target).toFixed(2)} ${circ.toFixed(2)}" ${rot} class="hill-arc${urgent?' urgent':''}" style="--w:${w}px"/>`;
+  }
 
   // ---------- Condición de victoria (varía según el modo de partida) ----------
+  function hillTargetTurns(){ return HILL_TARGET[state.players.length] || HILL_TARGET_DEFAULT; }
+  // Se llama al terminar el turno de `p` (después de moverse, empujar o poner una pared).
+  // Cuenta turnos SEGUIDOS: terminar el turno fuera de la zona reinicia el conteo.
+  function updateHillProgress(p){
+    if(isHillCell(p.r,p.c)){
+      p.hillTurns = (p.hillTurns||0) + 1;
+      // cada incremento suena con el efecto "tap" (un instante después, para que no se pise con el sonido de la jugada)
+      setTimeout(()=> playSfx('tap', ()=> playTone(660, 0.07, 'sine', 0.12)), 90);
+    } else p.hillTurns = 0;
+    return p.hillTurns >= hillTargetTurns();
+  }
   function checkWinAfterMove(p){
-    if(state.ruleset==='hill'){
-      if(isHillCell(p.r,p.c)) p.hillTurns = (p.hillTurns||0) + 1;
-      return p.hillTurns >= HILL_TARGET;
-    }
+    if(state.ruleset==='hill') return updateHillProgress(p);
     if(state.ruleset==='hunter'){
       return p.id===0 && p.r===state.objective.r && p.c===state.objective.c;
     }
@@ -599,6 +689,15 @@
         continue;
       }
       const jr=nr+dr, jc=nc+dc;
+      // Rey de la colina: empujar al rival adyacente. La jugada apunta a la casilla del rival
+      // (donde va a quedar el atacante) y `push` es la casilla a la que se desliza el rival.
+      // Se ofrece sólo si quedan empujones y no se lo acaba de empujar en el turno anterior.
+      if(state.ruleset==='hill' && (p.pushesLeft||0)>0 && !(state.lastPush && state.lastPush[playerIndex]===occupantIdx)){
+        const behindFree = jr>=0 && jc>=0 && jr<state.size && jc<state.size &&
+          !isBlocked(nr,nc,jr,jc,state.blockedEdges) &&
+          !state.players.some(pl=> pl.r===jr && pl.c===jc);
+        if(behindFree) moves.push({ r:nr, c:nc, push:{ r:jr, c:jc } });
+      }
       const straightOk = jr>=0 && jc>=0 && jr<state.size && jc<state.size &&
         !isBlocked(nr,nc,jr,jc,state.blockedEdges) &&
         !state.players.some((pl,i)=> i!==playerIndex && pl.r===jr && pl.c===jc);
@@ -1655,9 +1754,10 @@
     wallModeBtn.disabled = !canWall || !isHumanTurn;
     hintLine.classList.remove('thinking');
     if(state && state.winner){ hintLine.textContent=''; return; }
+    const canPush = !!state && state.ruleset==='hill' && state.validMoves.some(m=> m.push);
     hintLine.textContent = mode==='wall'
       ? 'Arrastrá sobre el tablero para ubicar la pared y soltá para confirmarla.'
-      : 'Tocá una casilla resaltada para moverte.';
+      : 'Tocá una casilla resaltada para moverte.' + (canPush ? ' La flecha empuja al rival.' : '');
   }
   moveModeBtn.addEventListener('click', ()=> setMode('move'));
   wallModeBtn.addEventListener('click', ()=> setMode('wall'));
@@ -1677,18 +1777,69 @@
     });
     return best;
   }
-  function findBestBlockingWall(opponentIdx,currentOppDist){
+  function findBestBlockingWall(opponentIdx,currentOppDist,distFn){
+    const distOf = distFn || distanceToCenter;
     const opp=state.players[opponentIdx], radius=3, maxSlot=state.size-2, candidates=[];
     for(let r=Math.max(0,opp.r-radius);r<=Math.min(maxSlot,opp.r+radius);r++) for(let c=Math.max(0,opp.c-radius);c<=Math.min(maxSlot,opp.c+radius);c++) for(const orientation of ['h','v']){
       const ev=evaluateWallForMode(r,c,orientation); if(!ev.valid) continue;
       const test=new Set(state.blockedEdges); ev.edges.forEach(e=>test.add(edgeKey(e[0],e[1],e[2],e[3])));
       if(ev.mirrorEdges) ev.mirrorEdges.forEach(e=>test.add(edgeKey(e[0],e[1],e[2],e[3])));
-      const d=distanceToCenter(opp.r,opp.c,test); if(d>currentOppDist) candidates.push({r,c,orientation,gain:d-currentOppDist,newOppDist:d});
+      const d=distOf(opp.r,opp.c,test); if(d>currentOppDist) candidates.push({r,c,orientation,gain:d-currentOppDist,newOppDist:d});
     }
     if(!candidates.length)return null;
     candidates.sort((a,b)=>b.gain-a.gain||a.newOppDist-b.newOppDist);
     const gain=candidates[0].gain, top=candidates.filter(x=>x.gain===gain);
     return top[Math.floor(Math.random()*top.length)];
+  }
+  // Pared que más alarga el camino a la zona del rival más cercano (los que ya están dentro no se pueden frenar).
+  function findHillBlockingWall(botIdx){
+    const rivals = [];
+    state.players.forEach((pl,i)=>{
+      if(i===botIdx) return;
+      const d = distanceToHill(pl.r,pl.c,state.blockedEdges);
+      if(d>0 && d<Infinity) rivals.push({ i, d });
+    });
+    rivals.sort((a,b)=> a.d-b.d);
+    for(const rv of rivals){
+      const w = findBestBlockingWall(rv.i, rv.d, distanceToHill);
+      if(w) return { type:'wall', r:w.r, c:w.c, orientation:w.orientation };
+    }
+    return null;
+  }
+  function findAnyLegalWall(){
+    for(let r=0;r<=state.size-2;r++) for(let c=0;c<=state.size-2;c++) for(const orientation of ['h','v']){
+      if(evaluateWallForMode(r,c,orientation).valid) return { type:'wall', r, c, orientation };
+    }
+    return null;
+  }
+  // IA de Rey de la colina: llegar a la casilla libre más cercana de la zona y, una vez dentro, sostenerla.
+  function botPlanHill(idx, profile){
+    const bot = state.players[idx], moves = state.validMoves;
+    const rank = list=> list.map(m=>({ m, score:scoreBotMove(idx,m,profile.personality) })).sort((a,b)=>b.score-a.score);
+    if(isHillCell(bot.r,bot.c)){
+      // 1) empujar al rival adyacente (sólo si el empujón me deja dentro de la zona: no quiero perder mi propio conteo)
+      if((bot.pushesLeft||0)>0){
+        const pushes = moves.filter(m=> m.push && isHillCell(m.r,m.c));
+        if(pushes.length){
+          const heat = m=>{ const rv=state.players.find(pl=> pl!==bot && pl.r===m.r && pl.c===m.c); return rv ? (rv.hillTurns||0) : 0; };
+          pushes.sort((a,b)=> heat(b)-heat(a));
+          return { type:'move', r:pushes[0].r, c:pushes[0].c };
+        }
+      }
+      const hold = moves.filter(m=> !m.push && isHillCell(m.r,m.c));
+      // 2) si no, una pared que alargue el camino del rival más cercano (las IA más fuertes la usan más seguido)
+      if(bot.wallsLeft>0 && (hold.length===0 || Math.random() < Math.min(1, (profile.wallChance||0)+0.4))){
+        const w = findHillBlockingWall(idx) || (hold.length===0 ? findAnyLegalWall() : null);
+        if(w) return w;
+      }
+      // 3) si no, moverse a otra casilla de la zona para no perder el conteo
+      if(hold.length){ const best = rank(hold)[0].m; return { type:'move', r:best.r, c:best.c }; }
+    }
+    if(!moves.length) return { type:'move', r:bot.r, c:bot.c };
+    // fuera de la zona (o sin forma de quedarse): el movimiento que mejor puntúa, con el ruido propio de cada dificultad
+    const scored = rank(moves);
+    const choice = Math.random()<profile.randomness ? scored[Math.floor(Math.random()*Math.min(3,scored.length))] : scored[0];
+    return { type:'move', r:choice.m.r, c:choice.m.c };
   }
   function botPlanMove(idx){
     const bot=state.players[idx], difficulty=bot.difficulty||'easy';
@@ -1700,6 +1851,7 @@
       else if(profile.personality==='aggressive') profile.wallChance=Math.min(.9,profile.wallChance+.1);
       else if(profile.personality==='speed') profile.wallChance=Math.max(.05,profile.wallChance-.1);
     }
+    if(state.ruleset==='hill') return botPlanHill(idx, profile);
     const isHunterBot = state.ruleset==='hunter' && bot.id!==0;
     if(isHunterBot) profile.wallChance=Math.max(profile.wallChance,.85);
     const oppIdx = isHunterBot ? 0 : otherPlayerClosestToCenter(idx);
@@ -1755,7 +1907,7 @@
       fresh = recordGameResult({
         winnerSlot: p.id,
         isCpuGame: !!state.isCpuGame,
-        isCpuHard:!!(state.isCpuGame&&state.players.some(pl=>pl.isCPU&&(pl.difficulty==='hard'||pl.difficulty==='expert'))),
+        cpuDifficulty: (state.isCpuGame && state.players[1]) ? state.players[1].difficulty : null,
         ruleset: state.ruleset,
         size: state.size,
         playersCount: state.players.length,
@@ -1811,6 +1963,20 @@
     if(state.winner) return;
     const idx = state.currentPlayerIndex;
     const p = state.players[idx];
+    // ¿la casilla elegida es un empujón? (la jugada guarda a dónde se desliza el rival)
+    const chosen = state.validMoves.find(m=> m.r===r && m.c===c);
+    const pushTo = (state.ruleset==='hill' && chosen && chosen.push) ? chosen.push : null;
+    if(pushTo){
+      const rival = state.players.find(pl=> pl!==p && pl.r===r && pl.c===c);
+      // datos para la animación: cada ficha desliza desde donde estaba (render() los consume una sola vez)
+      state.anim = { pusher: idx, pushed: state.players.indexOf(rival), pusherFrom:{ r:p.r, c:p.c }, pushedFrom:{ r:rival.r, c:rival.c } };
+      rival.r = pushTo.r; rival.c = pushTo.c;
+      rival.hillTurns = 0;                                  // ser empujado reinicia el conteo del rival
+      p.pushesLeft = Math.max(0, (p.pushesLeft||0) - 1);
+      state.lastPush[idx] = state.players.indexOf(rival);   // no se lo puede volver a empujar en el turno siguiente
+    } else if(state.lastPush){
+      state.lastPush[idx] = null;                           // cualquier otra acción libera la restricción
+    }
     p.r = r; p.c = c;
     state.moveCount = (state.moveCount||0) + 1;
     maybePickUpPower(p);
@@ -1820,8 +1986,8 @@
       finishGame(p);
       return;
     }
-    playMoveSound();
-    vibrate(12);
+    if(pushTo){ playWallSound(); vibrate(25); }   // el empujón suena como una pared, con un golpe más largo
+    else { playMoveSound(); vibrate(12); }
     if(state.skipAdvance){
       state.skipAdvance = false;
       state.validMoves = computeValidMoves(idx);
@@ -1856,17 +2022,15 @@
       if(gapAfter - gapBefore >= 3) cpuReact('anger');
     }
     cp.wallsLeft -= 1;
+    if(state.lastPush) state.lastPush[state.currentPlayerIndex] = null;
     state.moveCount = (state.moveCount||0) + 1;
     playWallSound();
     vibrate(18);
-    if(state.ruleset==='hill' && isHillCell(cp.r,cp.c)){
-      cp.hillTurns = (cp.hillTurns||0) + 1;
-      if(cp.hillTurns>=HILL_TARGET){
-        state.winner = cp;
-        render();
-        finishGame(cp);
-        return;
-      }
+    if(state.ruleset==='hill' && updateHillProgress(cp)){
+      state.winner = cp;
+      render();
+      finishGame(cp);
+      return;
     }
     advanceTurn();
     maybeSpawnPower();
@@ -1906,7 +2070,8 @@
     const idx = state.currentPlayerIndex;
     const moves = state.validMoves;
     if(!moves.length){ advanceTurn(); render(); return; }
-    const scored = moves.map(m=> ({ m, d: distanceToCenter(m.r, m.c, state.blockedEdges) }));
+    const plain = moves.filter(m=> !m.push);           // el reloj no gasta empujones por el jugador
+    const scored = (plain.length ? plain : moves).map(m=> ({ m, d: distanceToCenter(m.r, m.c, state.blockedEdges) }));
     scored.sort((a,b)=> a.d-b.d);
     performMove(scored[0].m.r, scored[0].m.c);
   }
@@ -1996,8 +2161,15 @@
       gridHTML += `<line x1="0" y1="${i*cs}" x2="${BOARD_PX}" y2="${i*cs}" stroke="var(--line)" stroke-width="1"/>`;
     }
     if(state.ruleset==='hill'){
+      // la zona se tiñe del color de quien la sostiene; la casilla de cada ocupante, un poco más fuerte
+      const holderIdx = hillHolderIndex();
+      const holder = holderIdx!=null ? state.players[holderIdx] : null;
       hillCells().forEach(cell=>{
-        gridHTML += `<rect x="${cell.c*cs}" y="${cell.r*cs}" width="${cs}" height="${cs}" fill="var(--accent)" opacity="0.14"/>`;
+        const occ = state.players.find(pl=> pl.r===cell.r && pl.c===cell.c);
+        const owner = occ || holder;
+        const fill = owner ? owner.color : 'var(--accent)';
+        const op = occ ? 0.32 : (holder ? 0.2 : 0.14);
+        gridHTML += `<rect x="${cell.c*cs}" y="${cell.r*cs}" width="${cs}" height="${cs}" fill="${fill}" opacity="${op}" class="hill-cell"/>`;
       });
     }
     const ccx=(state.center.c+0.5)*cs, ccy=(state.center.r+0.5)*cs;
@@ -2005,11 +2177,20 @@
     gridEl.innerHTML = gridHTML;
 
     let movesHTML = '';
+    let pushArrowsHTML = '';   // se dibujan sobre las fichas: la casilla de un empujón está ocupada por el rival
     const activePlayer = state.players[state.currentPlayerIndex];
     if(!state.winner && activePlayer && !activePlayer.isCPU){
       for(const m of state.validMoves){
         const cx=(m.c+0.5)*cs, cy=(m.r+0.5)*cs;
-        movesHTML += `<circle cx="${cx}" cy="${cy}" r="${cs*0.16}" fill="${activePlayer.color}" class="move-dot" opacity="0.8"/>`;
+        if(m.push){
+          // flecha en la dirección en que sale despedido el rival (no es un paso: no lleva el punto normal)
+          const ang = Math.atan2(m.push.r-m.r, m.push.c-m.c) * 180 / Math.PI;
+          const u = cs*0.2;
+          const pts = [[-1.3,-.36],[.2,-.36],[.2,-.95],[1.5,0],[.2,.95],[.2,.36],[-1.3,.36]].map(([x,y])=> `${(x*u).toFixed(1)},${(y*u).toFixed(1)}`).join(' ');
+          pushArrowsHTML += `<g transform="translate(${cx} ${cy}) rotate(${ang.toFixed(1)})" class="move-dot push-arrow"><polygon points="${pts}" fill="${activePlayer.color}" stroke="rgba(255,255,255,.92)" stroke-width="2" stroke-linejoin="round"/></g>`;
+        } else {
+          movesHTML += `<circle cx="${cx}" cy="${cy}" r="${cs*0.16}" fill="${activePlayer.color}" class="move-dot" opacity="0.8"/>`;
+        }
         movesHTML += `<rect data-r="${m.r}" data-c="${m.c}" x="${m.c*cs}" y="${m.r*cs}" width="${cs}" height="${cs}" fill="transparent" pointer-events="all" style="--tint:${activePlayer.color}" class="valid-move-hit"/>`;
       }
     }
@@ -2035,20 +2216,30 @@
     wallsEl.innerHTML = wallsHTML;
 
     let piecesHTML = '';
+    const anim = state.anim; state.anim = null;   // la animación del empujón se reproduce una sola vez
     state.players.forEach((p,i)=>{
       const cx=(p.c+0.5)*cs, cy=(p.r+0.5)*cs;
       const size = cs*0.58;
+      let g = '';
       if(i===state.currentPlayerIndex && !state.winner){
-        piecesHTML += `<circle cx="${cx}" cy="${cy}" r="${size*0.72}" fill="none" stroke="${p.color}" stroke-width="2.5" class="turn-ring"/>`;
+        g += `<circle cx="${cx}" cy="${cy}" r="${size*0.72}" fill="none" stroke="${p.color}" stroke-width="2.5" class="turn-ring"/>`;
       }
-      const cls = (i===justMovedIndex) ? 'piece-pop' : '';
-      piecesHTML += pieceMarkup(p.shape, cx, cy, size, p.color, cls);
+      if(state.ruleset==='hill') g += hillArcMarkup(p, cx, cy, cs);
+      const popped = (i===justMovedIndex) || (anim && (i===anim.pusher || i===anim.pushed));
+      // el atacante entra un poco después que el rival (clase "late")
+      g += pieceMarkup(p.shape, cx, cy, size, p.color, popped ? 'piece-pop' + (anim && i===anim.pusher ? ' late' : '') : '');
       if(p.stunned){
         const sz = cs*0.46;
-        piecesHTML += `<image href="${emoteIconSrc('swirl')}" x="${cx-sz/2}" y="${cy-size*0.95-sz/2}" width="${sz}" height="${sz}" pointer-events="none"/>`;
+        g += `<image href="${emoteIconSrc('swirl')}" x="${cx-sz/2}" y="${cy-size*0.95-sz/2}" width="${sz}" height="${sz}" pointer-events="none"/>`;
       }
+      if(anim && (i===anim.pusher || i===anim.pushed)){
+        const from = (i===anim.pusher) ? anim.pusherFrom : anim.pushedFrom;
+        const dx = (from.c - p.c) * cs, dy = (from.r - p.r) * cs;
+        g = `<g class="piece-slide${i===anim.pusher ? ' late' : ''}" style="--dx:${dx}px;--dy:${dy}px">${g}</g>`;
+      }
+      piecesHTML += g;
     });
-    piecesEl.innerHTML = piecesHTML;
+    piecesEl.innerHTML = piecesHTML + pushArrowsHTML;
 
     updateHeader();
     updateSidePanel();
@@ -2102,7 +2293,9 @@
       const team = teamOf(p.id);
       const teamTag = team ? `<span class="cpu-tag">Equipo ${team}</span>` : '';
       const stunTag = p.stunned ? `<span class="cpu-tag"><img src="${emoteIconSrc('swirl')}" alt="">aturdido</span>` : '';
-      const hillTag = (state.ruleset==='hill') ? `<span class="cpu-tag">⛰️ ${p.hillTurns||0}/${HILL_TARGET}</span>` : '';
+      const hillTag = (state.ruleset==='hill')
+        ? `<span class="cpu-tag">⛰️ ${p.hillTurns||0}/${hillTargetTurns()}</span><span class="cpu-tag" title="Empujones que le quedan"><img src="${emoteIconSrc('anger')}" alt="Empujones">${p.pushesLeft||0}</span>`
+        : '';
       const hunterTag = (state.ruleset==='hunter') ? (p.id===0 ? '<span class="cpu-tag">🏃 fugitivo</span>' : '<span class="cpu-tag">🏹 cazador</span>') : '';
       const emoteBtn = p.isCPU ? '' :
         `<button type="button" class="emote-btn ${(emoteCooldown[i]||0)>now?'cooldown':''}" data-pid="${i}" aria-label="Emotes de ${escapeHtml(p.name)}"><img src="${emoteIconSrc('faceHappy')}" alt=""></button>`;
@@ -2132,7 +2325,7 @@
       winMsg.textContent = 'El fugitivo llegó al centro antes de que lo atraparan.';
     } else if(state.ruleset==='hill'){
       winTitle.textContent = `¡${p.name} ganó!`;
-      winMsg.textContent = `Acumuló ${HILL_TARGET} turnos en la zona central. ¡Rey de la colina!`;
+      winMsg.textContent = `Se mantuvo ${hillTargetTurns()} turnos seguidos en la zona central. ¡Rey de la colina!`;
     } else {
       winTitle.textContent = team ? `¡Equipo ${team} ganó!` : `¡${p.name} ganó!`;
       if(state.campaign){
@@ -2202,11 +2395,6 @@
     const objective = (options.objective && Number.isInteger(options.objective.r) && Number.isInteger(options.objective.c))
       ? { r:Math.max(0,Math.min(size-1,options.objective.r)), c:Math.max(0,Math.min(size-1,options.objective.c)) }
       : { r:mid, c:mid };
-    const ruleset=options.ruleset||'classic', isDaily=!!options.isDaily;
-    const customPlayers=Array.isArray(options.playerConfigs)&&options.playerConfigs.length===playersCount?options.playerConfigs:null;
-    const wallsEach=isDaily?0:wallsPerPlayer(size,playersCount);
-    const names=options.names||loadPlayerNames(),isCpu=!!options.isCpu,difficulty=options.difficulty||'easy';
-    const objective=options.objective&&Number.isInteger(options.objective.r)&&Number.isInteger(options.objective.c)?{r:Math.max(0,Math.min(size-1,options.objective.r)),c:Math.max(0,Math.min(size-1,options.objective.c))}:{r:mid,c:mid};
 
     const players = order.map((slotKey,i)=>{
       const skin = pieceSkins[i] || PALETTE[i];
@@ -2226,21 +2414,15 @@
         wallsStart: customPlayers ? Math.max(0,+customPlayers[i].walls||0) : walls,
         isCPU: isCPU,
         difficulty: customPlayers ? (customPlayers[i].difficulty||'easy') : difficulty,
-        r:customPlayers?Math.max(0,Math.min(size-1,+customPlayers[i].r||0)):slots[slotKey].r,
-        c:customPlayers?Math.max(0,Math.min(size-1,+customPlayers[i].c||0)):slots[slotKey].c,
-        wallsLeft:customPlayers?Math.max(0,+customPlayers[i].walls||0):walls,
-        wallsStart:customPlayers?Math.max(0,+customPlayers[i].walls||0):walls,
-        isCPU:customPlayers?!!customPlayers[i].isCPU:isCPU,
-        difficulty:customPlayers?(customPlayers[i].difficulty||'easy'):difficulty,
         stunned: false,
         hillTurns: 0,
+        pushesLeft: ruleset==='hill' ? HILL_PUSHES : 0,
       };
     });
 
     state = {
       size,
       center: objective,
-      center:objective,
       objective,
       players,
       currentPlayerIndex: 0,
@@ -2249,8 +2431,9 @@
       walls: [],
       winner: null,
       validMoves: [],
+      lastPush: players.map(()=> null),   // por jugador: índice del rival al que empujó en su turno anterior
+      anim: null,                         // animación pendiente del empujón (la consume render)
       isCpuGame: isCpu || !!(customPlayers && customPlayers.some(p=> p.isCPU)),
-      isCpuGame:isCpu||!!(customPlayers&&customPlayers.some(p=>p.isCPU)),
       ruleset,
       moveCount: 0,
       powerUp: null,
@@ -2268,9 +2451,6 @@
       isCustomLevel: !!options.isCustomLevel,
       turnTimeSeconds: Math.max(0, +options.turnTimeSeconds || 0),
       playerConfigs: customPlayers ? customPlayers.map(p=> Object.assign({}, p)) : null,
-      isCustomLevel:!!options.isCustomLevel,
-      turnTimeSeconds:Math.max(0,+options.turnTimeSeconds||0),
-      playerConfigs:customPlayers?customPlayers.map(p=>Object.assign({},p)):null,
     };
     mode = 'move';
 
@@ -2297,6 +2477,7 @@
   // ---------- input handling (Pointer Events: works identically for mouse, touch and stylus) ----------
   let previewSlot = null;
   let dragging = false;
+  let siegeHintOn = false;   // el aviso de "zona con menos de 2 accesos" está en pantalla
 
   boardSvg.addEventListener('contextmenu', e=> e.preventDefault());
 
@@ -2330,6 +2511,7 @@
     }
     hideWallPreview();
     previewSlot = null;
+    if(siegeHintOn){ siegeHintOn = false; if(state && !state.winner) updateModeUI(); }
   }
   boardSvg.addEventListener('pointerup', finishWallDrag);
   boardSvg.addEventListener('pointercancel', finishWallDrag);
@@ -2341,6 +2523,10 @@
     const evalRes = evaluateWallForMode(slot.r, slot.c, slot.orientation);
     slot.valid = evalRes.valid;
     previewSlot = slot;
+    if(evalRes.reason==='hillSiege'){
+      hintLine.textContent = `No se puede cerrar la zona: tiene que quedar con al menos ${HILL_MIN_ACCESSES} accesos.`;
+      siegeHintOn = true;
+    } else if(siegeHintOn){ siegeHintOn = false; updateModeUI(); }
     const rect = wallRect(slot.r, slot.c, slot.orientation, cs);
     const cp = state.players[state.currentPlayerIndex];
     previewEl.setAttribute('x', rect.x);
@@ -2555,6 +2741,20 @@
       if(personality==='strategist')score+=(oppDist-myAfter)*0.9;
     }
     if(personality==='defensive')score+=distanceToCenter(bot.r,bot.c,state.blockedEdges)-myAfter;
+    if(state.ruleset==='hill'){
+      // término "hill": acercarse a la casilla libre más cercana de la zona, valorar estar dentro, no salir de ella
+      // y sólo gastar un empujón si me deja adentro
+      const inNow = isHillCell(bot.r,bot.c), inAfter = isHillCell(m.r,m.c);
+      let dz = inAfter ? 0 : distanceToHill(m.r,m.c,state.blockedEdges,hillFreeTargets(botIdx));
+      if(!isFinite(dz)) dz = 50;
+      score += -dz*25 + (inAfter?40:0) + ((inNow && !inAfter)?-150:0) + (m.push ? (inAfter?35:-100) : 0);
+      // con empujones disponibles, arrimarse al rival que va ganando dentro de la zona para poder sacarlo
+      if((bot.pushesLeft||0)>0 && !m.push){
+        let leader = null;
+        state.players.forEach((pl,i)=>{ if(i!==botIdx && isHillCell(pl.r,pl.c) && (pl.hillTurns||0)>0 && (!leader || pl.hillTurns>leader.hillTurns)) leader = pl; });
+        if(leader) score += -(Math.abs(m.r-leader.r)+Math.abs(m.c-leader.c))*6;
+      }
+    }
     return score;
   }
 
@@ -2922,37 +3122,6 @@
 
   // ---------- editor de niveles ----------
   let editorState = null;
-  function defaultEditorPlayers(size,count){
-    const mid=(size-1)/2;
-    const slots=[{r:0,c:mid},{r:size-1,c:mid},{r:mid,c:0},{r:mid,c:size-1}];
-    return slots.slice(0,count).map(p=>({r:p.r,c:p.c,walls:wallsPerPlayer(size,count),isCPU:false,difficulty:'easy'}));
-  }
-  function editorPlayerConfigHTML(){
-    let html='';
-    editorState.players.forEach((p,i)=>{
-      html += '<div class="editor-player-card"><div class="editor-player-title"><strong>Jugador '+(i+1)+'</strong></div>';
-      html += '<div class="editor-fields-4">';
-      html += '<label>Fila <input type="number" min="1" max="'+editorState.size+'" data-player="'+i+'" data-field="r" value="'+(p.r+1)+'"></label>';
-      html += '<label>Col. <input type="number" min="1" max="'+editorState.size+'" data-player="'+i+'" data-field="c" value="'+(p.c+1)+'"></label>';
-      html += '<label>Paredes <input type="number" min="0" max="50" data-player="'+i+'" data-field="walls" value="'+p.walls+'"></label>';
-      html += '<label>Control<select class="select-field" data-player="'+i+'" data-field="control"><option value="local" '+(!p.isCPU?'selected':'')+'>👤 Local</option><option value="cpu" '+(p.isCPU?'selected':'')+'>🤖 IA</option></select></label></div>';
-      html += '<label class="editor-difficulty '+(p.isCPU?'':'hidden')+'">Dificultad IA<select class="select-field" data-player="'+i+'" data-field="difficulty">';
-      html += '<option value="easy" '+(p.difficulty==='easy'?'selected':'')+'>Fácil</option><option value="normal" '+(p.difficulty==='normal'?'selected':'')+'>Normal</option><option value="hard" '+(p.difficulty==='hard'?'selected':'')+'>Difícil</option><option value="expert" '+(p.difficulty==='expert'?'selected':'')+'>Experto</option></select></label></div>';
-    });
-    return html;
-  }
-  function syncEditorControls(){
-    if(!editorState) return;
-    editorPlayersCount.value=String(editorState.players.length);
-    editorTurnTime.value=String(editorState.turnTime||0);
-    editorRuleset.value=editorState.ruleset||'classic';
-    document.querySelectorAll('input[name="editorObjective"]').forEach(r=>r.checked=r.value===editorState.objective.mode);
-    editorObjectiveRow.value=String(editorState.objective.r+1);
-    editorObjectiveCol.value=String(editorState.objective.c+1);
-    editorObjectiveCoords.classList.toggle('hidden',editorState.objective.mode!=='custom');
-    editorPlayersConfig.innerHTML=editorPlayerConfigHTML();
-    renderEditor();
-  }
   function editorReset(size){
     const count=editorState&&editorState.players ? editorState.players.length : 2;
     editorState={
@@ -2965,43 +3134,6 @@
     };
     syncEditorControls();
   }
-  function editorApplyObjective(){
-    const modeValue=document.querySelector('input[name="editorObjective"]:checked')?.value||'center';
-    editorState.objective.mode=modeValue;
-    if(modeValue==='center'){
-      editorState.objective.r=Math.floor((editorState.size-1)/2);
-      editorState.objective.c=Math.floor((editorState.size-1)/2);
-    }else{
-      editorState.objective.r=Math.max(0,Math.min(editorState.size-1,(+editorObjectiveRow.value||1)-1));
-      editorState.objective.c=Math.max(0,Math.min(editorState.size-1,(+editorObjectiveCol.value||1)-1));
-    }
-    syncEditorControls();
-  }
-  editorPlayersCount.addEventListener('change',()=>{
-    const count=Math.max(2,Math.min(4,+editorPlayersCount.value||2));
-    const old=editorState.players||[], next=defaultEditorPlayers(editorState.size,count);
-    next.forEach((p,i)=>{if(old[i]) Object.assign(p,old[i]); p.r=Math.max(0,Math.min(editorState.size-1,+p.r||0)); p.c=Math.max(0,Math.min(editorState.size-1,+p.c||0));});
-    editorState.players=next; syncEditorControls();
-  });
-  editorTurnTime.addEventListener('change',()=>editorState.turnTime=+editorTurnTime.value||0);
-  editorRuleset.addEventListener('change',()=>editorState.ruleset=editorRuleset.value);
-  document.querySelectorAll('input[name="editorObjective"]').forEach(r=>r.addEventListener('change',editorApplyObjective));
-  editorObjectiveRow.addEventListener('change',editorApplyObjective);
-  editorObjectiveCol.addEventListener('change',editorApplyObjective);
-  editorPlayersConfig.addEventListener('change',e=>{
-    const el=e.target.closest('[data-player]'); if(!el) return;
-    const p=editorState.players[+el.dataset.player]; if(!p) return;
-    if(el.dataset.field==='control'){p.isCPU=el.value==='cpu';syncEditorControls();}
-    if(el.dataset.field==='difficulty') p.difficulty=el.value;
-  });
-  editorPlayersConfig.addEventListener('input',e=>{
-    const el=e.target.closest('[data-player]'); if(!el) return;
-    const p=editorState.players[+el.dataset.player]; if(!p) return;
-    const v=+el.value;
-    if(el.dataset.field==='r') p.r=Math.max(0,Math.min(editorState.size-1,(v||1)-1));
-    if(el.dataset.field==='c') p.c=Math.max(0,Math.min(editorState.size-1,(v||1)-1));
-    if(el.dataset.field==='walls') p.walls=Math.max(0,Math.min(50,v||0));
-  });
   function editorCanPlaceWallSlot(r,c,orientation){
     const size = editorState.size;
     if(r<0||c<0||r>size-2||c>size-2) return false;
@@ -3046,9 +3178,6 @@
     if(editorState.players.some(p=>p.r===obj.r&&p.c===obj.c)) return false; // nadie puede empezar sobre el objetivo
     if(editorState.ruleset==='teams'&&editorState.players.length!==4) return false;
     if(editorState.ruleset==='mirror'&&editorState.players.length!==2) return false;
-    editorState.walls.forEach(w=>wallEdges(w.r,w.c,w.orientation).forEach(e=>blockedSet.add(edgeKey(e[0],e[1],e[2],e[3])));
-    for(const p of editorState.players) if(!hasPath(p.r,p.c,obj.r,obj.c,blockedSet,size)) return false;
-    if(editorState.ruleset==='teams'&&editorState.players.length!==4) return false;
     return true;
   }
   function renderEditor(){
@@ -3125,7 +3254,7 @@
     if(btn.dataset.act==='del'){
       list.splice(i,1); saveCustomLevels(list); renderEditorLevelsList();
     } else if(btn.dataset.act==='load'){
-      editorSizeSelect.value=String(lvl.size);
+      editorSizeSelect.value = String(lvl.size);
       editorReset(lvl.size);
       editorState.objective = lvl.objective ? Object.assign({}, lvl.objective) : editorState.objective;
       editorState.turnTime = +lvl.turnTime || 0;
@@ -3134,13 +3263,6 @@
       (lvl.walls||[]).forEach(w=>{ editorState.occupied[w.r][w.c]=w.orientation; editorState.walls.push(Object.assign({}, w)); });
       syncEditorControls();
       editorFeedback.textContent = `Cargaste "${lvl.name}". Podés seguir editando.`;
-      editorState.objective=lvl.objective||editorState.objective;
-      editorState.turnTime=+lvl.turnTime||0;
-      editorState.ruleset=lvl.ruleset||'classic';
-      if(Array.isArray(lvl.players)&&lvl.players.length>=2) editorState.players=lvl.players.slice(0,4);
-      lvl.walls.forEach(w=>{editorState.occupied[w.r][w.c]=w.orientation;editorState.walls.push(Object.assign({},w));});
-      syncEditorControls();
-      editorFeedback.textContent=`Cargaste "${lvl.name}". Podés seguir editando.`;
     } else if(btn.dataset.act==='play'){
       startCustomLevelMatch(lvl);
     }
@@ -3150,11 +3272,10 @@
     initGame(count,lvl.size,{presetWalls:lvl.walls||[],isCustomLevel:true,ruleset:lvl.ruleset||'classic',objective:lvl.objective,turnTimeSeconds:+lvl.turnTime||0,playerConfigs:lvl.players});
     editorScreen.classList.add('hidden');menuScreen.classList.add('hidden');gameScreen.classList.remove('hidden');
   }
-  editorSizeSelect.addEventListener('change', ()=>{editorReset(+editorSizeSelect.value);syncEditorControls();});
-  editorClearBtn.addEventListener('click', ()=>{editorReset(editorState.size);syncEditorControls();editorFeedback.textContent='Tablero limpio.';});
+  editorSizeSelect.addEventListener('change', ()=>{ editorReset(+editorSizeSelect.value); renderEditor(); });
+  editorClearBtn.addEventListener('click', ()=>{ editorReset(editorState.size); renderEditor(); editorFeedback.textContent='Tablero limpio.'; });
   editorSaveBtn.addEventListener('click', ()=>{
     if(!editorValidate()){ editorFeedback.textContent='El diseño no es válido: revisá las posiciones de los jugadores, el objetivo, que todos tengan camino posible o la cantidad de jugadores que pide el modo elegido.'; return; }
-    if(!editorValidate()){ editorFeedback.textContent='El diseño no es válido: revisá las posiciones, el objetivo o los caminos posibles.'; return; }
     levelNameInput.value = 'Mi nivel';
     openOverlay('namePrompt');                       // modal propio: prompt() no es confiable en un WebView
     setTimeout(()=>{ try{ levelNameInput.focus(); levelNameInput.select(); }catch(e){} }, 60);
@@ -3166,7 +3287,6 @@
     list.push({ name: name.slice(0,24), size: editorState.size, objective: Object.assign({}, editorState.objective), turnTime: editorState.turnTime||0, ruleset: editorState.ruleset||'classic',
       players: editorState.players.map(p=>({ r:p.r, c:p.c, walls:p.walls, isCPU:!!p.isCPU, difficulty:p.difficulty||'easy' })),
       walls: editorState.walls.map(w=>({r:w.r,c:w.c,orientation:w.orientation})) });
-    list.push({name:name.slice(0,24),size:editorState.size,objective:Object.assign({},editorState.objective),turnTime:editorState.turnTime||0,ruleset:editorState.ruleset||'classic',players:editorState.players.map(p=>({r:p.r,c:p.c,walls:p.walls,isCPU:!!p.isCPU,difficulty:p.difficulty||'easy'})),walls:editorState.walls.map(w=>({r:w.r,c:w.c,orientation:w.orientation}))});
     saveCustomLevels(list);
     renderEditorLevelsList();
     editorFeedback.textContent = 'Nivel guardado.';
@@ -3192,7 +3312,7 @@
   editorLinkBtn.addEventListener('click', ()=>{
     closeOverlay('more');
     editorReset(9);
-    syncEditorControls();
+    renderEditor();
     renderEditorLevelsList();
     menuScreen.classList.add('hidden');
     editorScreen.classList.remove('hidden');
@@ -3259,11 +3379,6 @@
       campaign: state.campaign, campaignLevel: state.campaignLevel, campaignRival: state.campaignRival, campaignPersonality: state.campaignPersonality,
       presetWalls: state.presetWalls, isCustomLevel: state.isCustomLevel, objective: state.objective,
       turnTimeSeconds: state.turnTimeSeconds, playerConfigs: state.playerConfigs,
-      campaign: state.campaign,
-      campaignLevel: state.campaignLevel,
-      campaignRival: state.campaignRival,
-      campaignPersonality:state.campaignPersonality,presetWalls:state.presetWalls,isCustomLevel:state.isCustomLevel,
-      objective:state.objective,turnTimeSeconds:state.turnTimeSeconds,playerConfigs:state.playerConfigs,
     };
     const playersCount = state.players.length;
     const size = state.size;

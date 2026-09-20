@@ -374,12 +374,23 @@ legend{ font-weight:600; margin-bottom:10px; font-size:.9rem; color:var(--ink-so
 .power-token .spin{ transform-box:fill-box; transform-origin:center; animation:powerSpin 2.4s linear infinite; }
 @keyframes piecePop{ 0%{ transform:scale(.35); opacity:.3; } 65%{ transform:scale(1.18); } 100%{ transform:scale(1); opacity:1; } }
 .piece-pop{ transform-box:fill-box; transform-origin:center; animation:piecePop 260ms ease-out; }
+/* empujón (Rey de la colina): el rival se desliza 200 ms y el atacante entra 120 ms después */
+@keyframes pieceSlide{ from{ transform:translate(var(--dx), var(--dy)); } to{ transform:translate(0px, 0px); } }
+.piece-slide{ animation:pieceSlide 200ms ease-out backwards; }
+.piece-slide.late{ animation-delay:120ms; }
+.piece-pop.late{ animation-delay:120ms; animation-fill-mode:backwards; }
+.push-arrow{ pointer-events:none; }
+/* progreso de Rey de la colina: el arco pulsa cuando al jugador le falta un turno para ganar */
+.hill-arc, .hill-arc-track{ pointer-events:none; }
+@keyframes hillArcPulse{ 0%,100%{ opacity:.7; stroke-width:var(--w); } 50%{ opacity:1; stroke-width:calc(var(--w) * 1.8); } }
+.hill-arc.urgent{ animation:hillArcPulse 0.9s ease-in-out infinite; }
 @keyframes centerGlow{ 0%,100%{ opacity:.35; r:15; } 50%{ opacity:.75; r:19; } }
 .center-glow{ transform-box:fill-box; transform-origin:center; animation:centerGlow 2.6s ease-in-out infinite; }
 @keyframes movePulse{ 0%,100%{ opacity:.55; } 50%{ opacity:.95; } }
 .move-dot{ animation:movePulse 1.4s ease-in-out infinite; pointer-events:none; }
 @keyframes turnRing{ 0%,100%{ opacity:.25; transform:scale(1); } 50%{ opacity:.55; transform:scale(1.16); } }
 .turn-ring{ transform-box:fill-box; transform-origin:center; animation:turnRing 1.8s ease-in-out infinite; }
+#piecesGroup{ pointer-events:none; }   /* las fichas no tapan los clics: hace falta para tocar la casilla de un rival y empujarlo */
 .valid-move-hit{ cursor:pointer; }
 .valid-move-hit:hover{ fill:var(--tint); opacity:.28; }
 
@@ -444,8 +455,6 @@ legend{ font-weight:600; margin-bottom:10px; font-size:.9rem; color:var(--ink-so
 .campaign-level-main small{ color:var(--ink-soft); font-size:.75rem; }
 .campaign-level-xp{ font-weight:800; font-size:.78rem; white-space:nowrap; }
 .locked-swatch{ opacity:.45; cursor:not-allowed !important; }
-
-/* ---------- FASE 3: EDITOR AVANZADO ---------- */
 .editor-config-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}
 .editor-config-grid fieldset{margin:0;padding:14px;border:1px solid var(--line);border-radius:14px;background:var(--panel-2)}
 .editor-config-grid legend{margin:0 0 8px}
@@ -553,4 +562,3 @@ legend{ font-weight:600; margin-bottom:10px; font-size:.9rem; color:var(--ink-so
   .mc-name{ font-size:.72rem; }
   .modes-grid{ gap:8px; }
 }
-@media(max-width:720px){.editor-config-grid{grid-template-columns:1fr}.editor-fields-4{grid-template-columns:1fr 1fr}}
