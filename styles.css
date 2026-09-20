@@ -444,6 +444,8 @@ legend{ font-weight:600; margin-bottom:10px; font-size:.9rem; color:var(--ink-so
 .campaign-level-main small{ color:var(--ink-soft); font-size:.75rem; }
 .campaign-level-xp{ font-weight:800; font-size:.78rem; white-space:nowrap; }
 .locked-swatch{ opacity:.45; cursor:not-allowed !important; }
+
+/* ---------- FASE 3: EDITOR AVANZADO ---------- */
 .editor-config-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}
 .editor-config-grid fieldset{margin:0;padding:14px;border:1px solid var(--line);border-radius:14px;background:var(--panel-2)}
 .editor-config-grid legend{margin:0 0 8px}
@@ -551,3 +553,4 @@ legend{ font-weight:600; margin-bottom:10px; font-size:.9rem; color:var(--ink-so
   .mc-name{ font-size:.72rem; }
   .modes-grid{ gap:8px; }
 }
+@media(max-width:720px){.editor-config-grid{grid-template-columns:1fr}.editor-fields-4{grid-template-columns:1fr 1fr}}
