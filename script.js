@@ -83,14 +83,33 @@
     teams:   { label:'2v2 (equipos)', hint:'Se juega siempre con 4 en el mismo dispositivo. Equipo A: jugadores 1 y 3. Equipo B: jugadores 2 y 4. Gana el equipo del primero en llegar al centro.', forcePlayers:4, forceLocal:true },
     party:   { label:'Fiesta', hint:'De vez en cuando aparece un poder en el tablero: pared extra, turno extra o aturdir al rival mejor ubicado.' },
     maze:    { label:'Laberinto', hint:'El tablero arranca con paredes al azar ya colocadas (o con tu propio diseño del editor de niveles), garantizando que siempre haya camino.' },
-    blitz:   { label:'Contrarreloj', hint:'Cada turno tiene 20 segundos. Si se acaba el tiempo, se juega un movimiento al azar y pasa el turno.' },
+    blitz:   { label:'Contrarreloj', hint:'Cada turno corre contra el reloj (10, 20, 30 o 45 s; por defecto 10 s + el tamaño del tablero), sea para mover o para poner una pared. Si se acaba, se juega solo el paso que más te acerca al centro (nunca una pared). Con 2 jugadores también hay reloj de ajedrez: 60 s de banco y +3 s por jugada; pierde quien llega a 0.' },
     mirror:  { label:'Espejo', hint:'Sólo para 2 jugadores. Cada pared que colocás aparece también reflejada en el punto opuesto del tablero.', forcePlayers:2 },
     hill:    { label:'Rey de la colina', hint:`No alcanza con pisar el centro: hay que terminar turnos SEGUIDOS dentro de la zona central (${HILL_TARGET_TEXT}). Si salís de la zona o te empujan, el conteo vuelve a 0. Cada jugador tiene ${HILL_PUSHES} empujones para sacar al rival, y no se puede cerrar la zona a menos de ${HILL_MIN_ACCESSES} accesos.` },
-    hunter:  { label:'Cazador y fugitivo', hint:'El Jugador 1 es el fugitivo y gana si llega al centro. El resto son cazadores: no ganan llegando al centro, sólo bloqueando con paredes antes de que se acabe el límite de turnos.' },
+    hunter:  { label:'Cazador y fugitivo', hint:'El Jugador 1 es el fugitivo (contra la IA elegís tu rol) y gana si llega al centro. Los cazadores ganan atrapándolo —terminar su movimiento junto al fugitivo, sin pared de por medio— o si se acaba el límite de rondas. El fugitivo tiene 2 sprints y deja huellas durante 2 turnos; los cazadores comparten un pozo de paredes.' },
   };
   const FOG_RADIUS = 2;
-  const BLITZ_SECONDS = 20;
-  const HUNTER_TURNS_PER_SIZE = 3; // límite de turnos totales = size * este valor
+  // Contrarreloj: segundos por turno configurables (por defecto 10 + tamaño del tablero) y reloj de ajedrez.
+  const BLITZ_SECONDS_CHOICES = [10, 20, 30, 45];
+  function blitzDefaultSeconds(size){ return 10 + size; }
+  const CLOCK_BANK_SECONDS = 60;          // reloj de ajedrez: banco inicial por jugador
+  const CLOCK_INCREMENT_SECONDS = 3;      // reloj de ajedrez: segundos que se suman por jugada
+  const CLOCK_LOW_SECONDS = 5;            // desde acá: tic con tono creciente y aro/barra en rojo
+  const CLOCK_VIBRATE_SECONDS = 3;        // desde acá: vibración corta en cada segundo
+  const TIMEOUT_PAUSE_STREAK = 2;         // vencimientos seguidos (sin que nadie juegue) que pausan la partida
+  const BOT_THINK_MS = [550, 1000];       // cuánto "piensa" la IA
+  const BOT_THINK_BLITZ_MS = [300, 600];  // ... en Contrarreloj
+  let blitzPrefs = { seconds:0, clock:'turn' };   // seconds 0 = automático (10 + tamaño); clock 'turn' | 'chess'
+  function blitzSetup(size, playersCount){        // lo que recibe initGame al arrancar una partida de Contrarreloj
+    return {
+      turnTimeSeconds: blitzPrefs.seconds || blitzDefaultSeconds(size),
+      clockMode: (blitzPrefs.clock==='chess' && playersCount===2) ? 'chess' : 'turn',
+    };
+  }
+  const HUNTER_ROUNDS_EXTRA = 3;   // límite de rondas = size + este valor (una ronda = todos jugaron una vez)
+  const HUNTER_SPRINTS = 2;        // usos del paso doble en línea recta del fugitivo
+  const HUNTER_POOL_MULT = 2;      // pozo compartido de paredes de los cazadores = paredes por jugador * este valor
+  const HUNTER_TRAIL_LIFE = 2;     // turnos del fugitivo que dura cada huella
   const CAMPAIGN_LEVELS = [
     { id:1, name:'Primer duelo', rival:'Toto', personality:'speed', difficulty:'easy', size:5, xp:100, intro:'Toto todavía está aprendiendo. Aprovechá sus movimientos directos.' },
     { id:2, name:'El desafío de Mora', rival:'Mora', personality:'defensive', difficulty:'easy', size:7, xp:125, intro:'Mora prefiere cerrar caminos antes que correr al centro.' },
@@ -158,6 +177,9 @@
     A('modo_espejo','Modos','🪞','Simetría perfecta','Ganá una partida en modo Espejo.','silver',6, s=> !!(s.modeWins&&s.modeWins.mirror>=1), s=> prog(s.modeWins&&s.modeWins.mirror,1)),
     A('modo_colina','Modos','⛰️','Rey de la colina','Ganá una partida en modo Rey de la colina.','silver',2, s=> !!(s.modeWins&&s.modeWins.hill>=1), s=> prog(s.modeWins&&s.modeWins.hill,1)),
     A('modo_cazador','Modos','🏹','Cacería exitosa','Ganá una partida en modo Cazador y fugitivo, como fugitivo o como cazador.','silver',4, s=> !!(s.modeWins&&s.modeWins.hunter>=1), s=> prog(s.modeWins&&s.modeWins.hunter,1)),
+    A('cazador_1','Modos','🎯','Ojo de halcón','Atrapá al fugitivo jugando de cazador.','silver',9, s=> s.hunterCaptures>=1, s=> prog(s.hunterCaptures,1)),
+    A('cazador_5','Modos','🦅','Cazador serial','Atrapá al fugitivo 5 veces jugando de cazador.','gold',3, s=> s.hunterCaptures>=5, s=> prog(s.hunterCaptures,5)),
+    A('fugitivo_3','Modos','💨','Escurridizo','Escapá al centro como fugitivo 3 veces.','silver',6, s=> s.hunterEscapes>=3, s=> prog(s.hunterEscapes,3)),
     A('todos_los_modos','Modos','🌈','Probaste de todo','Jugá al menos una vez en todos los modos especiales.','legend',9,
       s=> !!s.modesPlayed && MODE_KEYS.every(k=> (s.modesPlayed[k]||0)>=1),
       s=> prog(MODE_KEYS.filter(k=> s.modesPlayed && (s.modesPlayed[k]||0)>=1).length, MODE_KEYS.length)),
@@ -189,6 +211,9 @@
   const changeConfigBtn = document.getElementById('changeConfigBtn');
   const moveModeBtn = document.getElementById('moveModeBtn');
   const wallModeBtn = document.getElementById('wallModeBtn');
+  const sprintBtn = document.getElementById('sprintBtn');
+  const sprintCount = document.getElementById('sprintCount');
+  const roleFieldset = document.getElementById('roleFieldset');
   const hintLine = document.getElementById('hintLine');
   const repeatMapBtn = document.getElementById('repeatMapBtn');
   const winMapInfo = document.getElementById('winMapInfo');
@@ -250,6 +275,7 @@
   const rulesetSelect = document.getElementById('rulesetSelect');
   const rulesetHint = document.getElementById('rulesetHint');
   const turnTimerBadge = document.getElementById('turnTimerBadge');
+  const pauseNotice = document.getElementById('pauseNotice');
 
   const reminderTimeInput = document.getElementById('reminderTimeInput');
   const reminderToggleBtn = document.getElementById('reminderToggleBtn');
@@ -293,6 +319,9 @@
   const levelNameCancelBtn = document.getElementById('levelNameCancelBtn');
   const sfxVolumeInput = document.getElementById('sfxVolume');
   const sfxVolLabel = document.getElementById('sfxVolLabel');
+  const musicRow = document.getElementById('musicRow');
+  const musicVolumeInput = document.getElementById('musicVolume');
+  const musicVolLabel = document.getElementById('musicVolLabel');
   const vibrateToggle = document.getElementById('vibrateToggle');
   const showMovesToggle = document.getElementById('showMovesToggle');
   const glassToggle = document.getElementById('glassToggle');
@@ -587,15 +616,47 @@
   function checkWinAfterMove(p){
     if(state.ruleset==='hill') return updateHillProgress(p);
     if(state.ruleset==='hunter'){
-      return p.id===0 && p.r===state.objective.r && p.c===state.objective.c;
+      return p.id===state.fugitiveIdx && p.r===state.objective.r && p.c===state.objective.c;
     }
     return p.r===state.objective.r && p.c===state.objective.c;
   }
+  // ---------- Cazador y fugitivo: rondas, captura y huellas ----------
+  function hunterIndexes(){ return state.players.map((pl,i)=> i).filter(i=> i!==state.fugitiveIdx); }
+  // Rondas completas (todos los jugadores actuaron una vez). Se cuenta sobre moveCount, que suma las acciones de todos.
+  function hunterRoundsDone(){ return Math.floor((state.moveCount||0) / state.players.length); }
+  // Ronda que se está jugando ahora (1..límite); sirve para el rótulo "Ronda 4/12".
+  function hunterRoundNow(){ return Math.min(state.hunterRoundLimit, hunterRoundsDone() + 1); }
+  // Ronda en la que ocurrió la última acción (para el mensaje final).
+  function hunterRoundOfLastAction(){ return Math.min(state.hunterRoundLimit, Math.floor(Math.max(0,(state.moveCount||1)-1) / state.players.length) + 1); }
+  // Captura por adyacencia: el cazador que acaba de moverse quedó pegado al fugitivo y sin pared de por medio.
+  // Sólo cuenta la jugada del cazador: que el fugitivo pase cerca no lo atrapa.
+  function isCaptureAdjacent(r,c){
+    const f = state.players[state.fugitiveIdx];
+    if(!f || Math.abs(r-f.r)+Math.abs(c-f.c)!==1) return false;
+    return !isBlocked(r,c,f.r,f.c,state.blockedEdges);
+  }
+  function hunterWinnerForTimeout(){
+    const hs = hunterIndexes().map(i=> state.players[i]);
+    return hs.find(h=> !h.isCPU) || hs[0];    // si hay un cazador humano, la victoria es suya
+  }
   function checkHunterTimeout(){
     if(!state || state.ruleset!=='hunter' || state.winner) return;
-    if((state.moveCount||0) >= state.hunterTurnLimit){
-      finishGame(state.players[1], 'huntersWin');
+    if(hunterRoundsDone() >= state.hunterRoundLimit){
+      finishGame(hunterWinnerForTimeout(), 'huntersWin', 'timeout');
     }
+  }
+  // Huellas: cada casilla que deja el fugitivo vive HUNTER_TRAIL_LIFE turnos suyos.
+  function ageTrail(){
+    state.trail = (state.trail||[]).map(t=> ({ r:t.r, c:t.c, life:t.life-1 })).filter(t=> t.life>0);
+  }
+  function dropTrail(r,c){
+    state.trail = (state.trail||[]).filter(t=> !(t.r===r && t.c===c));
+    state.trail.push({ r, c, life:HUNTER_TRAIL_LIFE });
+  }
+  // Pozo compartido: los cazadores ven todos el mismo saldo (wallsLeft de cada uno es un reflejo del pozo).
+  function syncHunterPool(){
+    if(state.hunterPool==null) return;
+    hunterIndexes().forEach(i=>{ state.players[i].wallsLeft = state.hunterPool; });
   }
 
   // ---------- Generador de paredes al azar (modo Laberinto y Desafío diario) ----------
@@ -1071,6 +1132,16 @@
         }
       }
     }
+    // Cazador y fugitivo: sprint del fugitivo = paso doble en línea recta (las dos casillas libres y sin pared en medio)
+    if(state.ruleset==='hunter' && playerIndex===state.fugitiveIdx && (p.sprints||0)>0){
+      for(const [dr,dc] of DIRS4){
+        const mr=p.r+dr, mc=p.c+dc, lr=p.r+2*dr, lc=p.c+2*dc;
+        if(lr<0||lc<0||lr>=state.size||lc>=state.size) continue;
+        if(isBlocked(p.r,p.c,mr,mc,state.blockedEdges) || isBlocked(mr,mc,lr,lc,state.blockedEdges)) continue;
+        if(state.players.some(pl=> pl!==p && ((pl.r===mr&&pl.c===mc) || (pl.r===lr&&pl.c===lc)))) continue;
+        moves.push({ r:lr, c:lc, sprint:true });
+      }
+    }
     return moves;
   }
 
@@ -1085,6 +1156,7 @@
       break;
     }
     state.currentPlayerIndex = next;
+    state.sprintArmed = false;
     state.validMoves = computeValidMoves(next);
     const cpNext = state.players[next];
     mode = (!state.validMoves.length && cpNext.wallsLeft>0 && !cpNext.isCPU) ? 'wall' : 'move';
@@ -1097,13 +1169,14 @@
     hideEmoteBar();
     el.classList.remove('hidden');
     overlayStack.push(name);
-    if(!gameScreen.classList.contains('hidden')){ invalidateBotTimer(); clearTurnTimer(); }
+    if(!gameScreen.classList.contains('hidden')){ invalidateBotTimer(); syncTurnTimeLeft(); clearTurnTimer(); }
   }
   function closeOverlay(name){
     const el = overlayEls[name];
     if(!el) return;
     el.classList.add('hidden');
     overlayStack = overlayStack.filter(n=> n!==name);
+    if(name==='pause' && pauseNotice) pauseNotice.classList.add('hidden');   // el aviso de inactividad sólo vale para esa pausa
     if(name==='tutorial'){
       try{ localStorage.setItem('quoridor_tutorial_seen','1'); }catch(e){}
     }
@@ -1202,7 +1275,84 @@
       }catch(e){}
     });
   }
+  // ---------- música de fondo (en bucle, con volumen propio) ----------
+  // Pista esperada en assets/music/musica.mp3 (también prueba .ogg y .m4a). Si no hay archivo, no pasa nada:
+  // no suena nada y la barra de "Volumen de música" queda oculta en Ajustes.
+  // La música se mezcla por debajo de los efectos: al 100% del deslizador llega a MUSIC_CEIL del volumen máximo y la
+  // curva es cuadrática (el oído percibe mejor los cambios), así el valor por defecto queda "de fondo".
+  // Si la pista tuviera un volumen de grabación muy distinto, se ajusta con MUSIC_TRIM (1 = sin cambios).
+  const MUSIC_FILES = ['musica.mp3', 'musica.ogg', 'musica.m4a'];
+  const MUSIC_CEIL = 0.6;
+  const MUSIC_TRIM = 1;
+  const MUSIC_DEFAULT = 0.6;
+  let musicVolume = (function(){
+    const v = readPref('quoridor_music');
+    if(v!==null && v!=='' && !isNaN(+v)) return Math.min(1, Math.max(0, +v));
+    return MUSIC_DEFAULT;
+  })();
+  let musicEl = null, musicFileIdx = 0, musicAvailable = false, musicStarted = false, musicFade = null;
+  function musicLevel(){ return Math.min(1, MUSIC_CEIL * MUSIC_TRIM * musicVolume * musicVolume); }
+  function initMusic(){
+    if(musicEl || typeof Audio==='undefined') return;
+    try{
+      musicEl = new Audio();
+      musicEl.loop = true;
+      musicEl.preload = 'auto';
+      musicEl.volume = 0;
+      musicEl.addEventListener('loadedmetadata', ()=>{
+        musicAvailable = true;
+        musicRow.classList.remove('hidden');
+        if(musicStarted) syncMusic();
+      });
+      musicEl.addEventListener('error', ()=>{
+        musicFileIdx++;
+        if(musicFileIdx < MUSIC_FILES.length){ musicEl.src = ASSET + 'music/' + MUSIC_FILES[musicFileIdx]; }
+        else { musicAvailable = false; musicRow.classList.add('hidden'); }
+      });
+      musicEl.src = ASSET + 'music/' + MUSIC_FILES[0];
+    }catch(e){ musicEl = null; }
+  }
+  function fadeMusicTo(target, ms){
+    if(!musicEl) return;
+    if(musicFade){ clearInterval(musicFade); musicFade = null; }
+    const from = musicEl.volume, steps = Math.max(1, Math.round(ms/40));
+    let i = 0;
+    musicFade = setInterval(()=>{
+      i++;
+      try{ musicEl.volume = Math.min(1, Math.max(0, from + (target-from)*(i/steps))); }catch(e){}
+      if(i>=steps){ clearInterval(musicFade); musicFade = null; if(target<=0) try{ musicEl.pause(); }catch(e){} }
+    }, 40);
+  }
+  function syncMusic(){                          // deja la pista sonando (o en pausa) según volumen y visibilidad de la app
+    if(!musicEl || !musicAvailable) return;
+    const level = musicLevel();
+    if(level<=0 || document.hidden){ fadeMusicTo(0, 250); return; }
+    if(musicEl.paused){
+      const p = musicEl.play();
+      if(p && p.catch) p.catch(()=>{ musicStarted = false; });   // el navegador pidió otro toque: se reintenta en el próximo
+    }
+    fadeMusicTo(level, 700);
+  }
+  function startMusic(){
+    initMusic();
+    if(musicStarted) return;
+    musicStarted = true;
+    syncMusic();
+  }
+  function setMusicVolume(v){
+    musicVolume = Math.min(1, Math.max(0, v));
+    writePref('quoridor_music', musicVolume);
+    if(!musicEl) return;
+    if(musicFade){ clearInterval(musicFade); musicFade = null; }
+    if(musicLevel()<=0){ try{ musicEl.volume = 0; musicEl.pause(); }catch(e){} return; }
+    try{ musicEl.volume = musicLevel(); }catch(e){}
+    if(musicEl.paused && musicStarted) syncMusic();
+  }
+  document.addEventListener('visibilitychange', ()=>{ if(musicStarted) syncMusic(); });
+  initMusic();
+
   function unlockAudio(){
+    startMusic();
     const ctx = getAudioCtx();
     if(!ctx) return;
     if(ctx.state==='suspended'){ try{ ctx.resume(); }catch(e){} }
@@ -1282,6 +1432,7 @@
       fastestWinMoves:null, longestGameMoves:0, totalWallsPlaced:0,
       daily:{ lastDate:null, streak:0, bestStreak:0, completedCount:0, bestMoves:{} },
       customLevelsPlayed:0, skinsCustomized:false, partyStuns:0,
+      hunterCaptures:0, hunterEscapes:0,
       achievementsUnlocked:[],
     };
   }
@@ -1311,6 +1462,8 @@
         base.customLevelsPlayed = parsed.customLevelsPlayed || 0;
         base.skinsCustomized = !!parsed.skinsCustomized;
         base.partyStuns = parsed.partyStuns || 0;
+        base.hunterCaptures = parsed.hunterCaptures || 0;
+        base.hunterEscapes = parsed.hunterEscapes || 0;
         base.achievementsUnlocked = Array.isArray(parsed.achievementsUnlocked) ? parsed.achievementsUnlocked : [];
       }
     }catch(e){}
@@ -1347,6 +1500,8 @@
       statsData.longestGameMoves = summary.totalMovesThisGame;
     }
     statsData.totalWallsPlaced += (summary.wallsPlacedThisGame||0);
+    if(summary.capturedByHuman) statsData.hunterCaptures += 1;   // capturas hechas por un cazador humano (para logros propios)
+    if(summary.escapedByHuman) statsData.hunterEscapes += 1;     // escapes de un fugitivo humano
     saveStats();
     return checkAchievements(opts);
   }
@@ -2099,6 +2254,7 @@
     mode = m;
     hideWallPreview();
     previewSlot = null;
+    if(state.sprintArmed){ state.sprintArmed = false; redrawMoves(); }   // volver a Mover o pasar a pared desarma el sprint
     updateModeUI();
   }
   function updateModeUI(){
@@ -2110,13 +2266,39 @@
     moveModeBtn.disabled = !isHumanTurn;
     wallModeBtn.disabled = !canWall || !isHumanTurn;
     hintLine.classList.remove('thinking');
-    if(state && state.winner){ hintLine.textContent=''; return; }
+    if(state && state.winner){ hintLine.textContent=''; updateSprintBtn(); return; }
     const canPush = !!state && state.ruleset==='hill' && state.validMoves.some(m=> m.push);
     const mapTag = (state && state.mazeInfo && (state.moveCount||0) < state.players.length*2) ? 'Mapa: '+state.mazeInfo.name+'. ' : '';
     hintLine.textContent = mapTag + (mode==='wall'
       ? 'Arrastrá sobre el tablero para ubicar la pared y soltá para confirmarla.'
-      : 'Tocá una casilla resaltada para moverte.' + (canPush ? ' La flecha empuja al rival.' : ''));
+      : (state && state.sprintArmed
+        ? 'Sprint: tocá una casilla a dos pasos en línea recta.'
+        : 'Tocá una casilla resaltada para moverte.' + (canPush ? ' La flecha empuja al rival.' : '')));
+    updateSprintBtn();
   }
+  // Botón de sprint del HUD (sólo existe en Cazador y fugitivo; sólo lo usa el fugitivo humano en su turno)
+  function updateSprintBtn(){
+    const on = !!state && state.ruleset==='hunter';
+    sprintBtn.classList.toggle('hidden', !on);
+    if(!on) return;
+    const fug = state.players[state.fugitiveIdx];
+    const cp = state.players[state.currentPlayerIndex];
+    const myTurn = !state.winner && !!cp && state.currentPlayerIndex===state.fugitiveIdx && !cp.isCPU;
+    sprintCount.textContent = fug ? (fug.sprints||0) : 0;
+    sprintBtn.disabled = !(myTurn && state.validMoves.some(m=> m.sprint));
+    sprintBtn.classList.toggle('active', !!state.sprintArmed && mode==='move' && !sprintBtn.disabled);
+  }
+  function redrawMoves(){ movesEl.innerHTML = movesMarkup(cellSize()).moves; }
+  sprintBtn.addEventListener('click', ()=>{
+    if(!state || state.winner || state.ruleset!=='hunter' || sprintBtn.disabled) return;
+    state.sprintArmed = !state.sprintArmed;
+    mode = 'move';
+    hideWallPreview();
+    previewSlot = null;
+    redrawMoves();          // sólo los puntos: no reinicia el reloj de turno ni vuelve a llamar a la IA
+    updateModeUI();
+    playToggleSound(state.sprintArmed);
+  });
   moveModeBtn.addEventListener('click', ()=> setMode('move'));
   wallModeBtn.addEventListener('click', ()=> setMode('wall'));
 
@@ -2199,6 +2381,50 @@
     const choice = Math.random()<profile.randomness ? scored[Math.floor(Math.random()*Math.min(3,scored.length))] : scored[0];
     return { type:'move', r:choice.m.r, c:choice.m.c };
   }
+  // IA cazadora: 1) atrapar si puede quedar pegada al fugitivo, 2) frenarlo con paredes (casi siempre si está cerca del centro),
+  // 3) acercarse a él por el camino más corto (desempate: quedar cerca del centro, que es adonde tiene que ir).
+  function botPlanHunter(idx, profile){
+    const bot=state.players[idx], fIdx=state.fugitiveIdx, f=state.players[fIdx], moves=state.validMoves;
+    const catches = moves.filter(m=> isCaptureAdjacent(m.r,m.c));
+    if(catches.length && Math.random() >= profile.randomness*0.25){
+      const c = catches[Math.floor(Math.random()*catches.length)];
+      return { type:'move', r:c.r, c:c.c };
+    }
+    const fDist = distanceToCenter(f.r,f.c,state.blockedEdges);
+    if(bot.wallsLeft>0){
+      const chance = fDist<=2 ? Math.min(.95, profile.wallChance+.35) : profile.wallChance;   // más pared cuando el fugitivo está por ganar; escala con la dificultad
+      if(Math.random()<chance){ const w=findBestBlockingWall(fIdx,fDist); if(w) return {type:'wall',r:w.r,c:w.c,orientation:w.orientation}; }
+    }
+    if(!moves.length) return { type:'move', r:bot.r, c:bot.c };
+    const big = v=> isFinite(v) ? v : 99;
+    const scored = moves.map(m=> ({ m, score: -big(bfsShortestPath(m.r,m.c,f.r,f.c,state.blockedEdges,state.size))*10 - big(distanceToCenter(m.r,m.c,state.blockedEdges)) }))
+      .sort((a,b)=> b.score-a.score);
+    const choice = Math.random()<profile.randomness ? scored[Math.floor(Math.random()*Math.min(3,scored.length))] : scored[0];
+    return { type:'move', r:choice.m.r, c:choice.m.c };
+  }
+  // IA fugitiva: llegar al centro gana; si no, maximiza la distancia al cazador más cercano y desempata por distanceToCenter.
+  // La distancia se topa en HUNTER_SAFE_DIST (más lejos que eso ya no hay riesgo), así que con margen simplemente avanza al centro.
+  // El sprint se guarda para cuando está apurado (o para ganar).
+  const HUNTER_SAFE_DIST = 3;
+  function botPlanFugitive(idx, profile){
+    const bot=state.players[idx], moves=state.validMoves;
+    if(!moves.length) return { type:'move', r:bot.r, c:bot.c };
+    const hunters = hunterIndexes().map(i=> state.players[i]);
+    const evaluated = moves.map(m=>{
+      let nearest = Infinity;
+      hunters.forEach(h=>{ const d = bfsShortestPath(h.r,h.c,m.r,m.c,state.blockedEdges,state.size); if(d<nearest) nearest = d; });
+      const dc = distanceToCenter(m.r,m.c,state.blockedEdges);
+      return { m, nearest: Math.min(isFinite(nearest) ? nearest : HUNTER_SAFE_DIST, HUNTER_SAFE_DIST), toCenter: isFinite(dc) ? dc : 99 };
+    });
+    const win = evaluated.find(e=> e.toCenter===0);
+    if(win) return { type:'move', r:win.m.r, c:win.m.c };
+    const cmp = (a,b)=> b.nearest-a.nearest || a.toCenter-b.toCenter;
+    const plain = evaluated.filter(e=> !e.m.sprint).sort(cmp);
+    let list = plain;
+    if(!plain.length || plain[0].nearest < HUNTER_SAFE_DIST) list = evaluated.slice().sort(cmp);
+    const choice = Math.random() < profile.randomness*0.5 ? list[Math.floor(Math.random()*Math.min(3,list.length))] : list[0];
+    return { type:'move', r:choice.m.r, c:choice.m.c };
+  }
   function botPlanMove(idx){
     const bot=state.players[idx], difficulty=bot.difficulty||'easy';
     const profiles={easy:{wallChance:.12,randomness:.55,personality:'speed'},normal:{wallChance:.32,randomness:.28,personality:'speed'},hard:{wallChance:.58,randomness:.12,personality:'aggressive'},expert:{wallChance:.82,randomness:.04,personality:'strategist'}};
@@ -2210,12 +2436,11 @@
       else if(profile.personality==='speed') profile.wallChance=Math.max(.05,profile.wallChance-.1);
     }
     if(state.ruleset==='hill') return botPlanHill(idx, profile);
-    const isHunterBot = state.ruleset==='hunter' && bot.id!==0;
-    if(isHunterBot) profile.wallChance=Math.max(profile.wallChance,.85);
-    const oppIdx = isHunterBot ? 0 : otherPlayerClosestToCenter(idx);
+    if(state.ruleset==='hunter') return idx===state.fugitiveIdx ? botPlanFugitive(idx, profile) : botPlanHunter(idx, profile);
+    const oppIdx = otherPlayerClosestToCenter(idx);
     if(bot.wallsLeft>0&&oppIdx!=null){
       const myDist=distanceToCenter(bot.r,bot.c,state.blockedEdges),oppDist=distanceToCenter(state.players[oppIdx].r,state.players[oppIdx].c,state.blockedEdges);
-      if((isHunterBot||oppDist<=myDist+1)&&Math.random()<profile.wallChance){ const w=findBestBlockingWall(oppIdx,oppDist); if(w)return {type:'wall',r:w.r,c:w.c,orientation:w.orientation}; }
+      if(oppDist<=myDist+1&&Math.random()<profile.wallChance){ const w=findBestBlockingWall(oppIdx,oppDist); if(w)return {type:'wall',r:w.r,c:w.c,orientation:w.orientation}; }
     }
     const moves=state.validMoves; if(!moves.length)return {type:'move',r:bot.r,c:bot.c};
     const scored=moves.map(m=>({m,score:scoreBotMove(idx,m,profile.personality)})).sort((a,b)=>b.score-a.score);
@@ -2227,6 +2452,9 @@
     const cp = state.players[state.currentPlayerIndex];
     if(!cp || !cp.isCPU) return;
     const myToken = ++botToken;
+    // en Contrarreloj la IA piensa menos (300-600 ms en vez de 550-1000 ms)
+    const range = state.ruleset==='blitz' ? BOT_THINK_BLITZ_MS : BOT_THINK_MS;
+    const thinkMs = range[0] + Math.random()*(range[1]-range[0]);
     hintLine.textContent = 'La IA está pensando…';
     hintLine.classList.add('thinking');
     startThinking(state.currentPlayerIndex);
@@ -2234,21 +2462,31 @@
       if(myToken!==botToken) return;
       stopThinking();
       if(!state || state.winner) return;
-      const cpNow = state.players[state.currentPlayerIndex];
+      const idxNow = state.currentPlayerIndex;
+      const cpNow = state.players[idxNow];
       if(!cpNow || !cpNow.isCPU) return;
-      const decision = botPlanMove(state.currentPlayerIndex);
+      // reloj de ajedrez: el tiempo de "pensar" simulado se descuenta del banco de la IA (si llega a 0, pierde)
+      if(state.clockMode==='chess' && !chargeBotThinkTime(idxNow, thinkMs)) return;
+      const decision = botPlanMove(idxNow);
       if(decision.type==='move') performMove(decision.r, decision.c);
       else commitWall(decision.r, decision.c, decision.orientation);
-    }, 550 + Math.random()*450);
+    }, thinkMs);
+  }
+  function chargeBotThinkTime(idx, ms){
+    state.clock[idx] = Math.max(0, state.clock[idx] - ms/1000);
+    if(state.clock[idx] <= 0){ flagFall(idx); return false; }
+    return true;
   }
 
   function teamOf(playerId){
     if(state.ruleset!=='teams') return null;
     return (playerId===0 || playerId===2) ? 'A' : 'B';
   }
-  function finishGame(p, resultTag){
+  function finishGame(p, resultTag, reason){
     state.winner = p;
     state.resultTag = resultTag || null;
+    // Cazador y fugitivo: por qué terminó ('caught' atrapado · 'timeout' se acabaron las rondas · 'escaped' llegó al centro)
+    state.endReason = reason || (state.ruleset==='hunter' ? 'escaped' : null);
     const winnerTeam = teamOf(p.id);
     const wallsStart = p.wallsStart;
     const wallsUsedByWinner = Math.max(0, wallsStart - p.wallsLeft);
@@ -2273,6 +2511,8 @@
         movesUsed: state.moveCount,
         totalMovesThisGame: state.moveCount,
         wallsPlacedThisGame: state.walls.filter(w=>!w.env).length,
+        capturedByHuman: state.ruleset==='hunter' && state.endReason==='caught' && !p.isCPU,
+        escapedByHuman: state.ruleset==='hunter' && state.endReason==='escaped' && !p.isCPU,
       }, { toast:false });
       reward = gameReward(p);
     }
@@ -2321,6 +2561,7 @@
     if(state.winner) return;
     const idx = state.currentPlayerIndex;
     const p = state.players[idx];
+    if(!autoPlayInFlight && !p.isCPU) state.timeoutStreak = 0;   // una persona jugó: se corta la racha de vencimientos
     // ¿la casilla elegida es un empujón? (la jugada guarda a dónde se desliza el rival)
     const chosen = state.validMoves.find(m=> m.r===r && m.c===c);
     const pushTo = (state.ruleset==='hill' && chosen && chosen.push) ? chosen.push : null;
@@ -2335,6 +2576,15 @@
     } else if(state.lastPush){
       state.lastPush[idx] = null;                           // cualquier otra acción libera la restricción
     }
+    // Cazador y fugitivo: huellas y sprint (el paso doble deja huella también en la casilla del medio)
+    if(state.ruleset==='hunter' && idx===state.fugitiveIdx){
+      ageTrail();
+      if(chosen && chosen.sprint){
+        dropTrail(p.r+(r-p.r)/2, p.c+(c-p.c)/2);
+        p.sprints = Math.max(0, (p.sprints||0) - 1);
+      }
+      dropTrail(p.r, p.c);
+    }
     p.r = r; p.c = c;
     state.moveCount = (state.moveCount||0) + 1;
     maybePickUpPower(p);
@@ -2342,6 +2592,16 @@
       state.winner = p;
       render(idx);
       finishGame(p);
+      return;
+    }
+    settleClock(idx);                              // reloj de ajedrez: descuenta lo gastado y suma el incremento
+    // Captura por adyacencia: sólo cuenta la jugada de un cazador
+    if(state.ruleset==='hunter' && idx!==state.fugitiveIdx && isCaptureAdjacent(r,c)){
+      state.winner = p;
+      state.resultTag = 'huntersWin';
+      state.endReason = 'caught';
+      render(idx);
+      finishGame(p, 'huntersWin', 'caught');
       return;
     }
     if(pushTo){ playWallSound(); vibrate(25); }   // el empujón suena como una pared, con un golpe más largo
@@ -2363,6 +2623,7 @@
     const evalRes = evaluateWallForMode(r,c,orientation);
     if(!evalRes.valid) return;
     const cp = state.players[state.currentPlayerIndex];
+    if(!autoPlayInFlight && !cp.isCPU) state.timeoutStreak = 0;   // una persona jugó: se corta la racha de vencimientos
     const cpuOpp = (state.isCpuGame && !cp.isCPU && state.players[1]) ? state.players[1] : null;
     const gapBefore = cpuOpp ? distanceToCenter(cpuOpp.r, cpuOpp.c, state.blockedEdges) - distanceToCenter(cp.r, cp.c, state.blockedEdges) : 0;
     state.occupied[r][c] = orientation;
@@ -2379,7 +2640,13 @@
       const gapAfter = distanceToCenter(cpuOpp.r, cpuOpp.c, state.blockedEdges) - distanceToCenter(cp.r, cp.c, state.blockedEdges);
       if(gapAfter - gapBefore >= 3) cpuReact('anger');
     }
-    cp.wallsLeft -= 1;
+    if(state.hunterPool!=null && state.currentPlayerIndex!==state.fugitiveIdx){
+      state.hunterPool -= 1;      // los cazadores gastan del pozo común
+      syncHunterPool();
+    } else {
+      cp.wallsLeft -= 1;
+    }
+    if(state.ruleset==='hunter' && state.currentPlayerIndex===state.fugitiveIdx) ageTrail();   // poner pared también es un turno del fugitivo
     if(state.lastPush) state.lastPush[state.currentPlayerIndex] = null;
     state.moveCount = (state.moveCount||0) + 1;
     playWallSound();
@@ -2390,49 +2657,192 @@
       finishGame(cp);
       return;
     }
+    settleClock(state.currentPlayerIndex);        // reloj de ajedrez: descuenta lo gastado y suma el incremento
     advanceTurn();
     maybeSpawnPower();
     checkHunterTimeout();
     render();
   }
 
-  // ---------- Contrarreloj: temporizador por turno ----------
+  // ---------- Contrarreloj: reloj por turno y reloj de ajedrez ----------
+  // Un solo motor para los dos relojes. Guarda el vencimiento (Date.now) y refresca cada 100 ms:
+  //  · "turn":  cada turno arranca con state.turnTimeSeconds (mover o poner pared, da igual). Al vencer se
+  //             juega solo un paso (nunca una pared) y, tras TIMEOUT_PAUSE_STREAK vencimientos seguidos, se pausa.
+  //  · "chess": cada jugador tiene un banco (state.clock[i], en segundos) que sólo corre en su turno y gana
+  //             CLOCK_INCREMENT_SECONDS por jugada. Quien llega a 0 pierde (sin jugada automática).
+  // state.turnTimeLeft es siempre lo que le queda al reloj activo: por eso los overlays y el pasar la app a
+  // segundo plano pueden frenarlo y retomarlo después con startTurnTimer(true).
+  const TIMER_TICK_MS = 100;
   let turnTimerInterval = null;
-  function clearTurnTimer(){
+  let timerDeadline = 0;        // Date.now() en que vence el reloj que está corriendo
+  let timerOwner = -1;          // jugador dueño de ese reloj
+  let lastTickSec = null;       // último segundo entero anunciado (el tic y la vibración suenan una vez por segundo)
+  let autoPlayInFlight = false; // la jugada que se está haciendo la eligió el reloj, no una persona
+
+  function turnSeconds(){ return (state && state.turnTimeSeconds>0) ? state.turnTimeSeconds : 0; }
+  function activeClockKind(){
+    if(!state || state.winner) return null;
+    if(state.clockMode==='chess' && state.clock) return 'chess';
+    return turnSeconds()>0 ? 'turn' : null;
+  }
+  function clockTotalSeconds(kind){ return kind==='chess' ? CLOCK_BANK_SECONDS : turnSeconds(); }
+  function fmtClock(sec){
+    const s = Math.max(0, Math.ceil(sec));
+    return Math.floor(s/60) + ':' + String(s%60).padStart(2,'0');
+  }
+
+  // Pasa lo que ya transcurrió del reloj que corre a state.turnTimeLeft (y al banco, en ajedrez).
+  function syncTurnTimeLeft(){
+    if(!turnTimerInterval || !state) return;
+    const left = Math.max(0, (timerDeadline - Date.now())/1000);
+    state.turnTimeLeft = left;
+    if(state.clockMode==='chess' && state.clock && timerOwner>=0) state.clock[timerOwner] = left;
+  }
+  function haltTurnTimer(){
     if(turnTimerInterval){ clearInterval(turnTimerInterval); turnTimerInterval = null; }
+  }
+  function clearTurnTimer(){
+    haltTurnTimer();
     turnTimerBadge.classList.add('hidden');
   }
   function startTurnTimer(keep){
     clearTurnTimer();
     if(!state || state.winner) return;
-    const seconds = state.turnTimeSeconds>0 ? state.turnTimeSeconds : (state.isCustomLevel ? 0 : (state.ruleset==='blitz' ? BLITZ_SECONDS : 0));
-    if(seconds<=0) return;
-    const cp = state.players[state.currentPlayerIndex];
-    if(cp && cp.isCPU) return;
-    if(!(keep && state.turnTimeLeft>0)) state.turnTimeLeft = seconds;
+    const kind = activeClockKind();
+    if(!kind) return;
+    const idx = state.currentPlayerIndex, cp = state.players[idx];
+    if(kind==='chess') state.turnTimeLeft = state.clock[idx];
+    else if(!(keep && state.turnTimeLeft>0)) state.turnTimeLeft = turnSeconds();
+    // la IA no corre reloj de verdad (en ajedrez se le descuenta su tiempo de pensar al mover), y con la app
+    // en segundo plano el reloj espera: al volver se retoma con startTurnTimer(true)
+    if(!cp || cp.isCPU || document.hidden){ updateClockUI(); return; }
+    timerOwner = idx;
+    timerDeadline = Date.now() + state.turnTimeLeft*1000;
+    lastTickSec = Math.ceil(state.turnTimeLeft);
     turnTimerBadge.classList.remove('hidden');
-    turnTimerBadge.classList.toggle('low', state.turnTimeLeft<=5);
-    turnTimerBadge.textContent = `⏱️ ${state.turnTimeLeft}s`;
-    turnTimerInterval = setInterval(()=>{
-      state.turnTimeLeft -= 1;
-      if(state.turnTimeLeft<=5) turnTimerBadge.classList.add('low');
-      turnTimerBadge.textContent = `⏱️ ${Math.max(0,state.turnTimeLeft)}s`;
-      if(state.turnTimeLeft<=0){
-        clearTurnTimer();
-        autoPlayRandomMove();
-      }
-    }, 1000);
+    turnTimerInterval = setInterval(tickTurnTimer, TIMER_TICK_MS);
+    updateClockUI();
   }
-  function autoPlayRandomMove(){
+  function tickTurnTimer(){
+    if(!state || state.winner){ clearTurnTimer(); return; }
+    syncTurnTimeLeft();
+    const left = state.turnTimeLeft;
+    const sec = Math.ceil(left);
+    if(sec!==lastTickSec){
+      lastTickSec = sec;
+      if(sec>=1 && sec<=CLOCK_LOW_SECONDS){
+        // últimos 5 s: tic cada vez más agudo (5 s → 530 Hz … 1 s → 890 Hz) y, en los últimos 3, vibración corta
+        playTone(440 + (CLOCK_LOW_SECONDS + 1 - sec)*90, 0.09, 'square', 0.08);
+        if(sec<=CLOCK_VIBRATE_SECONDS) vibrate(15);
+      }
+    }
+    updateClockUI();
+    if(left<=0) onClockExpired();
+  }
+  function onClockExpired(){
+    haltTurnTimer();
+    if(state.clockMode==='chess'){ flagFall(timerOwner); return; }
+    // reloj por turno: se juega solo un paso; con 2 vencimientos seguidos se pausa para no dejar la partida sola
+    state.timeoutStreak = (state.timeoutStreak||0) + 1;
+    const mustPause = state.timeoutStreak >= TIMEOUT_PAUSE_STREAK;
+    playTone(200, 0.22, 'square', 0.13);
+    vibrate(40);
+    autoPlayInFlight = true;
+    try{ autoPlayBestMove(); } finally { autoPlayInFlight = false; }
     if(!state || state.winner) return;
-    const idx = state.currentPlayerIndex;
+    if(mustPause) pauseForInactivity();
+    else showToast('⏱️ Se acabó el tiempo: se jugó el paso más directo al centro.');
+  }
+  // Al vencer el reloj por turno se juega SOLO el paso que más acerca al centro. Nunca se coloca una pared
+  // ni se gasta un empujón en automático (si no hay ningún paso posible, simplemente pasa el turno).
+  function autoPlayBestMove(){
+    if(!state || state.winner) return;
     const moves = state.validMoves;
     if(!moves.length){ advanceTurn(); render(); return; }
-    const plain = moves.filter(m=> !m.push);           // el reloj no gasta empujones por el jugador
+    const plain = moves.filter(m=> !m.push && !m.sprint);   // el reloj no gasta empujones ni sprints por el jugador
     const scored = (plain.length ? plain : moves).map(m=> ({ m, d: distanceToCenter(m.r, m.c, state.blockedEdges) }));
     scored.sort((a,b)=> a.d-b.d);
     performMove(scored[0].m.r, scored[0].m.c);
   }
+  function pauseForInactivity(){
+    state.timeoutStreak = 0;     // al continuar vuelven a tener 2 oportunidades
+    pauseNotice.textContent = 'Se acabó el tiempo ' + TIMEOUT_PAUSE_STREAK + ' veces seguidas sin que nadie jugara, así que pausamos la partida. Tocá Continuar cuando quieras seguir.';
+    pauseNotice.classList.remove('hidden');
+    openOverlay('pause');
+  }
+
+  // Reloj de ajedrez: el jugador `idx` terminó su jugada (mover o pared) → se le descuenta lo gastado y se le suman 3 s.
+  function settleClock(idx){
+    if(!state || state.clockMode!=='chess' || !state.clock) return;
+    if(turnTimerInterval && timerOwner===idx) syncTurnTimeLeft();
+    haltTurnTimer();
+    state.clock[idx] = Math.max(0, state.clock[idx]) + CLOCK_INCREMENT_SECONDS;
+  }
+  // Se cayó la bandera: pierde `idx` y gana el otro jugador (el reloj de ajedrez es sólo de 2 jugadores).
+  function flagFall(idx){
+    if(!state || state.winner) return;
+    haltTurnTimer();
+    state.clock[idx] = 0;
+    const winner = state.players.find((pl,i)=> i!==idx);
+    state.flagLoser = idx;
+    state.resultTag = 'flag';
+    state.winner = winner;
+    render();                       // pinta el estado final (ya no corre ningún reloj)
+    finishGame(winner, 'flag');
+  }
+
+  // Anillo SVG alrededor de la ficha activa: se vacía con stroke-dashoffset a medida que pasa el tiempo.
+  function clockRingMarkup(p,i,cx,cy,cs){
+    if(state.winner || i!==state.currentPlayerIndex || p.isCPU || !activeClockKind()) return '';
+    const rad = cs*0.53, circ = 2*Math.PI*rad, w = Math.max(3, cs*0.05);
+    const c = circ.toFixed(2);
+    const rot = `transform="rotate(-90 ${cx} ${cy})"`;      // arranca a las 12 en punto
+    return `<circle cx="${cx}" cy="${cy}" r="${rad}" fill="none" stroke="${p.color}" stroke-width="${w}" opacity="0.2" class="clock-ring-track"/>`
+      + `<circle cx="${cx}" cy="${cy}" r="${rad}" fill="none" stroke="${p.color}" stroke-width="${w}" stroke-dasharray="${c} ${c}" stroke-dashoffset="0" data-circ="${c}" ${rot} class="clock-ring" style="--w:${w}px"/>`;
+  }
+  // Refresca badge, anillo y barras sin volver a dibujar el tablero (lo llama cada tick).
+  function updateClockUI(){
+    if(!state) return;
+    const kind = activeClockKind();
+    if(!kind) return;
+    const left = Math.max(0, state.turnTimeLeft || 0);
+    const low = left <= CLOCK_LOW_SECONDS;
+    if(turnTimerInterval){
+      turnTimerBadge.classList.toggle('low', low);
+      turnTimerBadge.textContent = kind==='chess' ? `⏱️ ${fmtClock(left)}` : `⏱️ ${Math.ceil(left)}s`;
+    }
+    const ring = piecesEl.querySelector('.clock-ring');
+    if(ring){
+      const circ = +ring.getAttribute('data-circ');
+      const frac = Math.min(1, left / clockTotalSeconds(kind));
+      ring.setAttribute('stroke-dashoffset', (circ*(1-frac)).toFixed(2));
+      ring.classList.toggle('low', low);
+    }
+    if(kind==='chess'){
+      playersListEl.querySelectorAll('.clock-line').forEach(el=>{
+        const t = Math.max(0, state.clock[+el.dataset.pid] || 0);
+        el.querySelector('.clock-fill').style.width = Math.min(100, t/CLOCK_BANK_SECONDS*100).toFixed(1) + '%';
+        const label = fmtClock(t), txt = el.querySelector('.clock-time');
+        if(txt.textContent!==label){ txt.textContent = label; el.setAttribute('aria-valuenow', String(Math.ceil(t))); }
+        el.classList.toggle('low', t <= CLOCK_LOW_SECONDS);
+      });
+    }
+  }
+
+  // Al pasar la app a segundo plano el reloj se frena (guardando lo que quedaba) y la IA deja de pensar;
+  // al volver se retoma exactamente donde estaba, así la jugada no se hace sola mientras no estabas mirando.
+  document.addEventListener('visibilitychange', ()=>{
+    if(!state || state.winner || gameScreen.classList.contains('hidden')) return;
+    if(document.hidden){
+      invalidateBotTimer();
+      syncTurnTimeLeft();          // guarda turnTimeLeft (y el banco) con lo que quedaba
+      clearTurnTimer();
+    } else if(overlayStack.length===0){
+      scheduleBotTurnIfNeeded();
+      startTurnTimer(true);
+      updateHunterBadge();
+    }
+  });
 
   // ---------- shapes ----------
   function pieceMarkup(shape,cx,cy,size,color,extraClass){
@@ -2502,6 +2912,34 @@
     }
   }
 
+  // Puntos (y áreas de toque) de las jugadas válidas del jugador activo.
+  function movesMarkup(cs){
+    let movesHTML = '';
+    let pushArrowsHTML = '';   // se dibujan sobre las fichas: la casilla de un empujón está ocupada por el rival
+    const activePlayer = state.players[state.currentPlayerIndex];
+    if(!state.winner && activePlayer && !activePlayer.isCPU){
+      for(const m of state.validMoves){
+        if(!!m.sprint !== !!state.sprintArmed) continue;    // los sprints sólo se ven con el botón armado (y entonces no se ven los pasos normales)
+        const cx=(m.c+0.5)*cs, cy=(m.r+0.5)*cs;
+        if(m.push){
+          // flecha en la dirección en que sale despedido el rival (no es un paso: no lleva el punto normal)
+          const ang = Math.atan2(m.push.r-m.r, m.push.c-m.c) * 180 / Math.PI;
+          const u = cs*0.2;
+          const pts = [[-1.3,-.36],[.2,-.36],[.2,-.95],[1.5,0],[.2,.95],[.2,.36],[-1.3,.36]].map(([x,y])=> `${(x*u).toFixed(1)},${(y*u).toFixed(1)}`).join(' ');
+          pushArrowsHTML += `<g transform="translate(${cx} ${cy}) rotate(${ang.toFixed(1)})" class="move-dot push-arrow"><polygon points="${pts}" fill="${activePlayer.color}" stroke="rgba(255,255,255,.92)" stroke-width="2" stroke-linejoin="round"/></g>`;
+        } else if(m.sprint){
+          const isz = cs*0.46;
+          movesHTML += `<circle cx="${cx}" cy="${cy}" r="${cs*0.3}" fill="${activePlayer.color}" opacity="0.22" class="move-dot"/>`
+            + `<image href="${emoteIconSrc('exclamations')}" x="${cx-isz/2}" y="${cy-isz/2}" width="${isz}" height="${isz}" class="move-dot" pointer-events="none"/>`;
+        } else {
+          movesHTML += `<circle cx="${cx}" cy="${cy}" r="${cs*0.16}" fill="${activePlayer.color}" class="move-dot" opacity="0.8"/>`;
+        }
+        movesHTML += `<rect data-r="${m.r}" data-c="${m.c}" x="${m.c*cs}" y="${m.r*cs}" width="${cs}" height="${cs}" fill="transparent" pointer-events="all" style="--tint:${activePlayer.color}" class="valid-move-hit"/>`;
+      }
+    }
+    return { moves: movesHTML, arrows: pushArrowsHTML };
+  }
+
   // ---------- render ----------
   function render(justMovedIndex){
     const cs = cellSize();
@@ -2534,25 +2972,10 @@
     gridHTML += `<circle cx="${ccx}" cy="${ccy}" r="15" fill="none" stroke="var(--accent)" stroke-width="3" class="center-glow"/>`;
     gridEl.innerHTML = gridHTML;
 
-    let movesHTML = '';
-    let pushArrowsHTML = '';   // se dibujan sobre las fichas: la casilla de un empujón está ocupada por el rival
     const activePlayer = state.players[state.currentPlayerIndex];
-    if(!state.winner && activePlayer && !activePlayer.isCPU){
-      for(const m of state.validMoves){
-        const cx=(m.c+0.5)*cs, cy=(m.r+0.5)*cs;
-        if(m.push){
-          // flecha en la dirección en que sale despedido el rival (no es un paso: no lleva el punto normal)
-          const ang = Math.atan2(m.push.r-m.r, m.push.c-m.c) * 180 / Math.PI;
-          const u = cs*0.2;
-          const pts = [[-1.3,-.36],[.2,-.36],[.2,-.95],[1.5,0],[.2,.95],[.2,.36],[-1.3,.36]].map(([x,y])=> `${(x*u).toFixed(1)},${(y*u).toFixed(1)}`).join(' ');
-          pushArrowsHTML += `<g transform="translate(${cx} ${cy}) rotate(${ang.toFixed(1)})" class="move-dot push-arrow"><polygon points="${pts}" fill="${activePlayer.color}" stroke="rgba(255,255,255,.92)" stroke-width="2" stroke-linejoin="round"/></g>`;
-        } else {
-          movesHTML += `<circle cx="${cx}" cy="${cy}" r="${cs*0.16}" fill="${activePlayer.color}" class="move-dot" opacity="0.8"/>`;
-        }
-        movesHTML += `<rect data-r="${m.r}" data-c="${m.c}" x="${m.c*cs}" y="${m.r*cs}" width="${cs}" height="${cs}" fill="transparent" pointer-events="all" style="--tint:${activePlayer.color}" class="valid-move-hit"/>`;
-      }
-    }
-    movesEl.innerHTML = movesHTML;
+    const marks = movesMarkup(cs);
+    const pushArrowsHTML = marks.arrows;   // se dibujan sobre las fichas
+    movesEl.innerHTML = marks.moves;
 
     let wallsHTML = '';
     const fogCenter = (state.ruleset==='fog' && activePlayer) ? (activePlayer.isCPU ? (state.players.find(pl=> !pl.isCPU) || activePlayer) : activePlayer) : null;
@@ -2575,6 +2998,15 @@
     wallsEl.innerHTML = wallsHTML;
 
     let piecesHTML = '';
+    // huellas del fugitivo (Cazador y fugitivo): puntos que se apagan a medida que envejecen
+    if(state.ruleset==='hunter' && state.trail && state.trail.length){
+      const fug = state.players[state.fugitiveIdx];
+      state.trail.forEach(t=>{
+        if(state.players.some(pl=> pl.r===t.r && pl.c===t.c)) return;
+        const tx=(t.c+0.5)*cs, ty=(t.r+0.5)*cs, a = t.life>=HUNTER_TRAIL_LIFE ? 0.8 : 0.4;
+        piecesHTML += `<g opacity="${a}" pointer-events="none"><circle cx="${tx-cs*0.09}" cy="${ty+cs*0.05}" r="${cs*0.075}" fill="${fug.color}" class="trail-dot"/><circle cx="${tx+cs*0.09}" cy="${ty-cs*0.05}" r="${cs*0.075}" fill="${fug.color}" class="trail-dot"/></g>`;
+      });
+    }
     const anim = state.anim; state.anim = null;   // la animación del empujón se reproduce una sola vez
     state.players.forEach((p,i)=>{
       const cx=(p.c+0.5)*cs, cy=(p.r+0.5)*cs;
@@ -2584,6 +3016,7 @@
         g += `<circle cx="${cx}" cy="${cy}" r="${size*0.72}" fill="none" stroke="${p.color}" stroke-width="2.5" class="turn-ring"/>`;
       }
       if(state.ruleset==='hill') g += hillArcMarkup(p, cx, cy, cs);
+      g += clockRingMarkup(p, i, cx, cy, cs);
       const popped = (i===justMovedIndex) || (anim && (i===anim.pusher || i===anim.pushed));
       // el atacante entra un poco después que el rival (clase "late")
       g += pieceMarkup(p.shape, cx, cy, size, p.color, popped ? 'piece-pop' + (anim && i===anim.pusher ? ' late' : '') : '');
@@ -2613,16 +3046,24 @@
     // tiempo) administra su propio badge en startTurnTimer/clearTurnTimer, así que acá no lo tocamos.
     if(!state || state.ruleset!=='hunter' || state.winner) return;
     if(turnTimerInterval) return; // hay un reloj de turno corriendo: tiene prioridad sobre el badge
-    const remaining = Math.max(0, state.hunterTurnLimit - (state.moveCount||0));
+    const remaining = Math.max(0, state.hunterRoundLimit - hunterRoundsDone());
     turnTimerBadge.classList.remove('hidden');
-    turnTimerBadge.classList.toggle('low', remaining<=5);
-    turnTimerBadge.textContent = `🏃 ${remaining} turno${remaining===1?'':'s'}`;
+    turnTimerBadge.classList.toggle('low', remaining<=2);
+    turnTimerBadge.textContent = `🏃 Ronda ${hunterRoundNow()}/${state.hunterRoundLimit}`;
   }
 
   function updateHeader(){
     if(state.winner){
       if(state.resultTag==='huntersWin'){
-        turnIndicator.textContent = '¡Los cazadores atraparon al fugitivo!';
+        const fug = state.players[state.fugitiveIdx];
+        turnIndicator.textContent = state.endReason==='timeout'
+          ? 'Se acabó el tiempo: ganan los cazadores'
+          : `¡${fug.name} fue atrapado por ${state.winner.name}!`;
+        turnIndicator.style.color = state.winner.color;
+        return;
+      }
+      if(state.resultTag==='flag' && state.players[state.flagLoser]){
+        turnIndicator.textContent = `¡${state.players[state.flagLoser].name} se quedó sin tiempo! Ganó ${state.winner.name}`;
         turnIndicator.style.color = state.winner.color;
         return;
       }
@@ -2655,14 +3096,23 @@
       const hillTag = (state.ruleset==='hill')
         ? `<span class="cpu-tag">⛰️ ${p.hillTurns||0}/${hillTargetTurns()}</span><span class="cpu-tag" title="Empujones que le quedan"><img src="${emoteIconSrc('anger')}" alt="Empujones">${p.pushesLeft||0}</span>`
         : '';
-      const hunterTag = (state.ruleset==='hunter') ? (p.id===0 ? '<span class="cpu-tag">🏃 fugitivo</span>' : '<span class="cpu-tag">🏹 cazador</span>') : '';
+      const isFug = state.ruleset==='hunter' && i===state.fugitiveIdx;
+      const hunterTag = (state.ruleset==='hunter')
+        ? (isFug ? `<span class="cpu-tag">🏃 fugitivo</span><span class="cpu-tag" title="Sprints que le quedan"><img src="${emoteIconSrc('exclamations')}" alt="Sprints">${p.sprints||0}</span>` : '<span class="cpu-tag">🏹 cazador</span>')
+        : '';
+      const sharedWalls = state.ruleset==='hunter' && state.hunterPool!=null && !isFug && hunterIndexes().length>1;
+      const chess = state.clockMode==='chess' && state.clock;
+      const clockLine = chess
+        ? `<div class="clock-line${state.clock[i]<=CLOCK_LOW_SECONDS?' low':''}" data-pid="${i}" role="progressbar" aria-label="Reloj de ${escapeHtml(p.name)}" aria-valuemin="0" aria-valuemax="${CLOCK_BANK_SECONDS}" aria-valuenow="${Math.ceil(Math.max(0,state.clock[i]))}"><span class="clock-track"><span class="clock-fill" style="width:${Math.min(100, Math.max(0,state.clock[i])/CLOCK_BANK_SECONDS*100).toFixed(1)}%"></span></span><span class="clock-time">${fmtClock(state.clock[i])}</span></div>`
+        : '';
       const emoteBtn = p.isCPU ? '' :
         `<button type="button" class="emote-btn ${(emoteCooldown[i]||0)>now?'cooldown':''}" data-pid="${i}" aria-label="Emotes de ${escapeHtml(p.name)}"><img src="${emoteIconSrc('faceHappy')}" alt=""></button>`;
-      return `<li class="player-row ${active?'active':''}" style="--pc:${p.color}; --pc-bg:${bg}">
+      return `<li class="player-row ${active?'active':''}${chess?' has-clock':''}" style="--pc:${p.color}; --pc-bg:${bg}">
         <span class="row-icon">${smallShapeSVG(p.shape,p.color,22)}</span>
         <span class="player-name">${escapeHtml(p.name)}${cpuTag}${teamTag}${stunTag}${hillTag}${hunterTag}</span>
-        <span class="wall-count">${p.wallsLeft} <span class="wall-label">paredes</span></span>
+        <span class="wall-count">${p.wallsLeft} <span class="wall-label">${sharedWalls ? 'del equipo' : 'paredes'}</span></span>
         ${emoteBtn}
+        ${clockLine}
       </li>`;
     }).join('');
   }
@@ -2676,12 +3126,21 @@
       const par = state.dailyPar, used = state.moveCount;
       winTitle.textContent = '¡Desafío diario resuelto!';
       winMsg.textContent = `Lo resolviste en ${used} movimiento${used===1?'':'s'} (par: ${par}). ${used<=par ? '¡Igualaste o mejoraste el par!' : 'Volvé mañana por un nuevo tablero.'}`;
-    } else if(state.resultTag==='huntersWin'){
-      winTitle.textContent = '¡Atraparon al fugitivo!';
-      winMsg.textContent = 'Los cazadores se las arreglaron con las paredes para acorralarlo antes de que se acabaran los turnos.';
+    } else if(state.resultTag==='flag' && state.players[state.flagLoser]){
+      winTitle.textContent = `¡${p.name} ganó!`;
+      winMsg.textContent = `${state.players[state.flagLoser].name} se quedó sin tiempo en el reloj de ajedrez.`;
     } else if(state.ruleset==='hunter'){
-      winTitle.textContent = `¡${p.name} escapó!`;
-      winMsg.textContent = 'El fugitivo llegó al centro antes de que lo atraparan.';
+      const fug = state.players[state.fugitiveIdx];
+      if(state.endReason==='caught'){
+        winTitle.textContent = `¡Atrapado por ${p.name}!`;
+        winMsg.textContent = `${fug.name} no pudo escapar: ${p.name} lo alcanzó en la ronda ${hunterRoundOfLastAction()} de ${state.hunterRoundLimit}.`;
+      } else if(state.endReason==='timeout'){
+        winTitle.textContent = 'Se acabó el tiempo';
+        winMsg.textContent = `${fug.name} no llegó al centro en ${state.hunterRoundLimit} rondas: ganan los cazadores.`;
+      } else {
+        winTitle.textContent = `¡${p.name} escapó!`;
+        winMsg.textContent = `Llegó al centro en la ronda ${hunterRoundOfLastAction()} de ${state.hunterRoundLimit}, antes de que lo atraparan.`;
+      }
     } else if(state.ruleset==='hill'){
       winTitle.textContent = `¡${p.name} ganó!`;
       winMsg.textContent = `Se mantuvo ${hillTargetTurns()} turnos seguidos en la zona central. ¡Rey de la colina!`;
@@ -2762,12 +3221,23 @@
       ? { r:Math.max(0,Math.min(size-1,options.objective.r)), c:Math.max(0,Math.min(size-1,options.objective.c)) }
       : { r:mid, c:mid };
 
+    // Cazador y fugitivo: contra la IA el humano es siempre el jugador 0 y elige rol; la IA ocupa el otro puesto.
+    const fugitiveIdx = (ruleset==='hunter' && isCpu && !customPlayers && options.hunterRole==='hunter') ? 1 : 0;
+    // pozo compartido de los cazadores (no aplica a niveles del editor, que traen sus propias paredes)
+    const hunterPoolOn = ruleset==='hunter' && !isDaily && !customPlayers;
+    const hunterPool = wallsEach * HUNTER_POOL_MULT;
+    // Contrarreloj: tiempo por turno (por defecto 10 + tamaño) y reloj de ajedrez (sólo de 2 jugadores)
+    const isBlitzPlain = ruleset==='blitz' && !options.isCustomLevel && !isDaily;
+    let turnTimeSeconds = Math.max(0, +options.turnTimeSeconds || 0);
+    if(!turnTimeSeconds && isBlitzPlain) turnTimeSeconds = blitzDefaultSeconds(size);
+    const clockMode = (isBlitzPlain && options.clockMode==='chess' && playersCount===2) ? 'chess' : null;
+
     const players = order.map((slotKey,i)=>{
       const skin = pieceSkins[i] || PALETTE[i];
       const isCPU = customPlayers ? !!customPlayers[i].isCPU : (isCpu && i===1);
       let walls = wallsEach;
-      if(ruleset==='hunter' && !isDaily){
-        walls = (i===0) ? Math.max(1, Math.floor(wallsEach/2)) : (wallsEach + 2);
+      if(hunterPoolOn){
+        walls = (i===fugitiveIdx) ? Math.max(1, Math.floor(wallsEach/2)) : hunterPool;
       }
       return {
         id: i,
@@ -2783,6 +3253,7 @@
         stunned: false,
         hillTurns: 0,
         pushesLeft: ruleset==='hill' ? HILL_PUSHES : 0,
+        sprints: (ruleset==='hunter' && i===fugitiveIdx) ? HUNTER_SPRINTS : 0,
       };
     });
 
@@ -2806,8 +3277,13 @@
       skipAdvance: false,
       isDaily,
       dailyPar: null,
-      hunterTurnLimit: ruleset==='hunter' ? size*HUNTER_TURNS_PER_SIZE : null,
+      hunterRoundLimit: ruleset==='hunter' ? size + HUNTER_ROUNDS_EXTRA : null,
+      fugitiveIdx,
+      hunterPool: hunterPoolOn ? hunterPool : null,
+      trail: [],
+      sprintArmed: false,
       resultTag: null,
+      endReason: null,
       campaign: !!options.campaign,
       campaignLevel: options.campaignLevel || null,
       campaignRival: options.campaignRival || null,
@@ -2815,7 +3291,12 @@
       campaignXPReward: 0,
       presetWalls: Array.isArray(options.presetWalls) ? options.presetWalls : null,
       isCustomLevel: !!options.isCustomLevel,
-      turnTimeSeconds: Math.max(0, +options.turnTimeSeconds || 0),
+      turnTimeSeconds,
+      clockMode,                                             // null | 'chess'
+      clock: clockMode ? players.map(()=> CLOCK_BANK_SECONDS) : null,   // reloj de ajedrez: segundos que le quedan a cada jugador
+      turnTimeLeft: 0,                                       // lo que le queda al reloj activo
+      timeoutStreak: 0,                                      // vencimientos seguidos sin que nadie jugara
+      flagLoser: null,                                       // reloj de ajedrez: quién se quedó sin tiempo
       playerConfigs: customPlayers ? customPlayers.map(p=> Object.assign({}, p)) : null,
     };
     mode = 'move';
@@ -2919,6 +3400,10 @@
     const r = document.querySelector('input[name="gmode"]:checked');
     return r ? r.value : 'local';
   }
+  function currentHunterRole(){
+    const r = document.querySelector('input[name="hrole"]:checked');
+    return r && r.value==='hunter' ? 'hunter' : 'fugitive';
+  }
   function currentPlayersCount(){
     const rs = RULESETS[currentRuleset()];
     if(rs && rs.forcePlayers) return rs.forcePlayers;
@@ -2967,6 +3452,7 @@
     if(rs && rs.forceLocal){ document.getElementById('modeLocal').checked = true; }
     const m = currentMode();
     difficultyFieldset.classList.toggle('hidden', m!=='cpu');
+    roleFieldset.classList.toggle('hidden', !(m==='cpu' && currentRuleset()==='hunter'));
     if(rs && rs.forcePlayers){
       playersFieldset.classList.add('hidden');
       const el = document.getElementById('p'+rs.forcePlayers);
@@ -2983,6 +3469,12 @@
   document.getElementById('playersGroup').addEventListener('change', updateMenuVisibility);
 
   // ---------- ajustes (tema, volumen, vibración, ayudas visuales) ----------
+  function setMusicSliderFill(){
+    const pct = Math.round(musicVolume*100);
+    musicVolumeInput.style.setProperty('--pct', pct + '%');
+    musicVolLabel.textContent = pct + '%';
+    document.getElementById('musicWrap').style.setProperty('--p', String(pct/100));
+  }
   function setSliderFill(){
     const pct = Math.round(sfxVolume*100);
     sfxVolumeInput.style.setProperty('--pct', pct + '%');
@@ -2998,6 +3490,8 @@
     if(radio) radio.checked = true;
     sfxVolumeInput.value = Math.round(sfxVolume*100);
     setSliderFill();
+    musicVolumeInput.value = Math.round(musicVolume*100);
+    setMusicSliderFill();
     vibrateToggle.checked = vibrateOn;
     showMovesToggle.checked = showMovesOn;
     glassToggle.checked = glassOn;
@@ -3006,6 +3500,7 @@
   settingsThemeGroup.addEventListener('change', e=>{ applyTheme(e.target.value); });
   sfxVolumeInput.addEventListener('input', ()=>{ setSfxVolume(+sfxVolumeInput.value/100); setSliderFill(); });
   sfxVolumeInput.addEventListener('change', ()=>{ playMoveSound(); });        // muestra el volumen elegido
+  musicVolumeInput.addEventListener('input', ()=>{ setMusicVolume(+musicVolumeInput.value/100); setMusicSliderFill(); });
   vibrateToggle.addEventListener('change', ()=>{
     vibrateOn = vibrateToggle.checked;
     writePref('quoridor_vibrate', vibrateOn ? '1' : '0');
@@ -3219,6 +3714,7 @@
   mazeMineCheck.addEventListener('change', ()=>{ saveMazePrefs(); refreshMazePreview(); });
   mazeDiceBtn.addEventListener('click', ()=>{ mazeMenuSeed = newMazeSeed(); refreshMazePreview(); vibrate(8); });
   document.getElementById('sizeGroup').addEventListener('change', refreshMazePreview);
+  document.getElementById('sizeGroup').addEventListener('change', syncModeButton);     // el "Auto" de Contrarreloj depende del tamaño
   customLevelSelect.addEventListener('change', refreshMazePreview);
 
   function defaultEditorPlayers(size,count){
@@ -3352,6 +3848,7 @@
       modesGrid.addEventListener('keydown', onGridKey);
       modesOverlay.addEventListener('click', e=>{ if(e.target===modesOverlay) close(); });
       modesOverlay.addEventListener('keydown', e=>{ if(e.key==='Escape'){ e.stopPropagation(); close(); } });
+      modeDetail.addEventListener('change', onDetailChange);
       modesConfirmBtn.addEventListener('click', confirm);
       modesCloseBtn.addEventListener('click', close);
       modeTriggerBtn.addEventListener('click', open);
@@ -3373,7 +3870,61 @@
         + '<div class="md-tags"><span class="md-tag">'+players+'</span><span class="md-tag">'+who+'</span>'
         + (pending==='maze' ? '<span class="md-tag">Densidad: '+MAZE_DENSITIES[currentMazeDensity()]+'</span>' : '')
         + (won(pending) ? '<span class="md-tag won"><img src="'+medalSrc(m.medal)+'" alt="">Ganado</span>' : '')
-        + '</div></div>';
+        + '</div>'
+        + (pending==='blitz' ? blitzConfigHTML() : '')
+        + '</div>';
+      if(pending==='blitz') syncBlitzControls();
+    }
+    // Contrarreloj: tipo de reloj y segundos por turno (se guardan al tocar; el tamaño del tablero define el "Auto")
+    function menuBoardSize(){
+      const r = document.querySelector('input[name="size"]:checked');
+      return r ? +r.value : 9;
+    }
+    function blitzConfigHTML(){
+      const autoSecs = blitzDefaultSeconds(menuBoardSize());
+      const secs = [0].concat(BLITZ_SECONDS_CHOICES).map(v=>
+        '<input type="radio" name="blitzSecs" id="bs'+v+'" value="'+v+'"><label for="bs'+v+'">'+(v ? v+' s' : 'Auto '+autoSecs+' s')+'</label>').join('');
+      return '<div class="md-config">'
+        + '<div class="md-config-row"><span class="md-config-label">Reloj</span>'
+        + '<div class="segmented" role="radiogroup" aria-label="Tipo de reloj">'
+        + '<input type="radio" name="blitzClock" id="bcTurn" value="turn"><label for="bcTurn">Por turno</label>'
+        + '<input type="radio" name="blitzClock" id="bcChess" value="chess"><label for="bcChess">Ajedrez 60 s + 3 s</label>'
+        + '</div></div>'
+        + '<div class="md-config-row"><span class="md-config-label">Segundos por turno</span>'
+        + '<div class="segmented" id="blitzSecsGroup" role="radiogroup" aria-label="Segundos por turno">'+secs+'</div></div>'
+        + '<p class="md-config-note" id="blitzNote"></p>'
+        + '</div>';
+    }
+    function syncBlitzControls(){
+      const two = currentPlayersCount()===2;
+      const chess = blitzPrefs.clock==='chess' && two;
+      const q = id=> document.getElementById(id);
+      if(!q('bcTurn')) return;
+      q('bcTurn').checked = !chess;
+      q('bcChess').checked = chess;
+      q('bcChess').disabled = !two;
+      const secsEl = q('bs'+blitzPrefs.seconds) || q('bs0');
+      secsEl.checked = true;
+      BLITZ_SECONDS_CHOICES.concat([0]).forEach(v=>{ q('bs'+v).disabled = chess; });
+      q('blitzSecsGroup').classList.toggle('is-off', chess);
+      q('blitzNote').textContent = !two ? 'El reloj de ajedrez es sólo para 2 jugadores.'
+        : (chess ? 'Cada jugador tiene 60 s para toda la partida y gana 3 s por jugada. Pierde quien llega a 0.' : '');
+    }
+    function blitzSummary(){
+      const chess = blitzPrefs.clock==='chess' && currentPlayersCount()===2;
+      return chess ? 'Reloj de ajedrez 60 s + 3 s' : (blitzPrefs.seconds || blitzDefaultSeconds(menuBoardSize()))+' s por turno';
+    }
+    function onDetailChange(e){
+      const t = e.target;
+      if(!t || (t.name!=='blitzClock' && t.name!=='blitzSecs')) return;
+      if(t.name==='blitzClock') blitzPrefs.clock = t.value==='chess' ? 'chess' : 'turn';
+      else blitzPrefs.seconds = BLITZ_SECONDS_CHOICES.indexOf(+t.value)>=0 ? +t.value : 0;
+      const cfg = loadLastSetup() || {};
+      cfg.blitzSeconds = blitzPrefs.seconds; cfg.blitzClock = blitzPrefs.clock;
+      saveLastSetup(cfg);
+      syncBlitzControls();
+      syncTrigger();
+      playToggleSound(true); vibrate(8);
     }
     function select(key, focusCard){
       if(!isAvailable(key)) return;
@@ -3446,7 +3997,7 @@
         modeTriggerPlate.innerHTML = plateHTML(MODE_BY_KEY[key]);
         modeTriggerName.textContent = rs(key).label;
       }
-      modeTriggerSub.textContent = 'Tocá para ver los '+MODE_CATALOG.length+' modos';
+      modeTriggerSub.textContent = key==='blitz' ? blitzSummary()+' · tocá para cambiar' : 'Tocá para ver los '+MODE_CATALOG.length+' modos';
     }
     return { build, open, close, confirm, syncTrigger };
   })();
@@ -3860,7 +4411,8 @@
       ruleset: state.ruleset,
       campaign: state.campaign, campaignLevel: state.campaignLevel, campaignRival: state.campaignRival, campaignPersonality: state.campaignPersonality,
       presetWalls: state.presetWalls, isCustomLevel: state.isCustomLevel, objective: state.objective,
-      turnTimeSeconds: state.turnTimeSeconds, playerConfigs: state.playerConfigs,
+      turnTimeSeconds: state.turnTimeSeconds, clockMode: state.clockMode, playerConfigs: state.playerConfigs,
+      hunterRole: state.fugitiveIdx===1 ? 'hunter' : 'fugitive',
     };
     if(state.mazeInfo){
       cfg.mazeDensity = state.mazeInfo.density;
@@ -3895,11 +4447,14 @@
       if(inp){ names[i] = inp.value.trim(); }
     }
     savePlayerNames(names);
+    const hunterRole = currentHunterRole();
     saveLastSetup({ playersCount, size: +document.querySelector('input[name="size"]:checked').value, mode:m, difficulty, ruleset,
-      mazeDensity: currentMazeDensity(), mazeMine: !!mazeMineCheck.checked });
+      mazeDensity: currentMazeDensity(), mazeMine: !!mazeMineCheck.checked, hunterRole,
+      blitzSeconds: blitzPrefs.seconds, blitzClock: blitzPrefs.clock });
 
     const mazeOpts = (ruleset==='maze' && !presetWalls) ? { mazeSeed: mazeMenuSeed, mazeDensity: currentMazeDensity(), mazeMine: mazeMineCheck.checked ? loadUserPatterns() : [] } : {};
-    initGame(playersCount, size, Object.assign({ isCpu, difficulty, names, ruleset, presetWalls, isCustomLevel }, mazeOpts));
+    const blitzOpts = (ruleset==='blitz' && !isCustomLevel) ? blitzSetup(size, playersCount) : {};
+    initGame(playersCount, size, Object.assign({ isCpu, difficulty, names, ruleset, presetWalls, isCustomLevel, hunterRole }, mazeOpts, blitzOpts));
     mazeMenuSeed = newMazeSeed();                    // el próximo mapa del menú ya es otro
     menuScreen.classList.add('hidden');
     gameScreen.classList.remove('hidden');
@@ -3975,6 +4530,9 @@
       const dr = document.querySelector('input[name="mazeDensity"][value="'+cfg.mazeDensity+'"]'); if(dr) dr.checked = true;
     }
     if(cfg.mazeMine) mazeMineCheck.checked = true;
+    if(cfg.hunterRole==='hunter'){ const hr = document.getElementById('roleHunter'); if(hr) hr.checked = true; }
+    if(BLITZ_SECONDS_CHOICES.indexOf(+cfg.blitzSeconds)>=0) blitzPrefs.seconds = +cfg.blitzSeconds;
+    if(cfg.blitzClock==='chess') blitzPrefs.clock = 'chess';
   })();
 
   if(window.__QUORIDOR_TEST__){

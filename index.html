@@ -6,7 +6,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="theme-color" content="#efe9dc">
+<meta name="theme-color" content="#1a1410">
 <title>Quoridor · Carrera al centro</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -42,6 +42,15 @@
         <input type="radio" name="difficulty" id="diffExpert" value="expert"><label for="diffExpert" aria-label="Experto" title="Experto"><span class="stars-row"><img src="assets/ui/star.png" alt=""><img src="assets/ui/star.png" alt=""><img src="assets/ui/star.png" alt=""><img src="assets/ui/star.png" alt=""></span></label>
       </div>
       <p class="field-hint" id="difficultyHint"></p>
+    </fieldset>
+
+    <fieldset id="roleFieldset" class="hidden">
+      <legend>Tu rol</legend>
+      <div class="segmented" id="roleGroup">
+        <input type="radio" name="hrole" id="roleFugitive" value="fugitive" checked><label for="roleFugitive">🏃 Fugitivo</label>
+        <input type="radio" name="hrole" id="roleHunter" value="hunter"><label for="roleHunter">🏹 Cazador</label>
+      </div>
+      <p class="field-hint">La IA juega el otro rol. El fugitivo gana llegando al centro; el cazador, atrapándolo o agotando las rondas.</p>
     </fieldset>
 
     <fieldset id="playersFieldset">
@@ -144,6 +153,7 @@
   <div class="mode-toggle" id="modeToggle">
     <button type="button" class="kbtn small mode-btn active" id="moveModeBtn" data-mode="move">🚶 Mover</button>
     <button type="button" class="kbtn small mode-btn" id="wallModeBtn" data-mode="wall">🧱 Colocar pared</button>
+    <button type="button" class="kbtn small mode-btn hidden" id="sprintBtn" aria-label="Sprint: paso doble en línea recta"><img class="btn-ico" src="assets/emotes/icons/exclamations.png" alt=""> Sprint <span id="sprintCount">2</span></button>
   </div>
   <p class="hint-line" id="hintLine">Tocá una casilla resaltada para moverte.</p>
 
@@ -203,6 +213,7 @@
 <div id="pauseOverlay" class="overlay-backdrop hidden">
   <div class="modal-card" id="pauseCard">
     <h2>Pausa</h2>
+    <p class="pause-notice hidden" id="pauseNotice" role="status" aria-live="polite"></p>
     <div class="modal-actions">
       <button class="kbtn yellow big block" id="resumeBtn">Continuar</button>
       <button class="kbtn grey block" id="settingsBtn">⚙️ Ajustes</button>
@@ -273,6 +284,10 @@
     <div class="settings-row">
       <span>Volumen de efectos <b id="sfxVolLabel" class="vol-label"></b></span>
       <div class="kslider-wrap" id="sfxWrap"><div class="kbar"><i></i></div><input type="range" class="kslider" id="sfxVolume" min="0" max="100" step="5" value="80" aria-label="Volumen de efectos"></div>
+    </div>
+    <div class="settings-row hidden" id="musicRow">
+      <span>Volumen de música <b id="musicVolLabel" class="vol-label"></b></span>
+      <div class="kslider-wrap" id="musicWrap"><div class="kbar"><i></i></div><input type="range" class="kslider" id="musicVolume" min="0" max="100" step="5" value="60" aria-label="Volumen de música"></div>
     </div>
     <label class="settings-check"><input type="checkbox" class="kcheck" id="vibrateToggle"><span>Vibración</span></label>
     <label class="settings-check"><input type="checkbox" class="kcheck" id="showMovesToggle"><span>Mostrar movimientos posibles</span></label>
