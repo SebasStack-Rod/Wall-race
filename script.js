@@ -120,17 +120,6 @@
   }
   let campaignData=loadCampaign();
   const PARTY_TYPES = ['pared_extra','turno_extra','aturdido'];
-  // Plantillas de paredes para el modo Laberinto: cada una es una lista de segmentos
-  // relativos a un punto de anclaje (dr,dc,orientation). Se prueban una por una y si
-  // alguna rompe el camino de algún jugador, se descarta la plantilla completa.
-  const MAZE_TEMPLATES = [
-    [ [0,0,'h'], [0,1,'h'] ],                       // línea de 2 (pared larga)
-    [ [0,0,'v'], [1,0,'v'] ],                       // línea vertical de 2
-    [ [0,0,'h'], [0,1,'h'], [1,1,'v'] ],             // forma de L
-    [ [0,0,'v'], [0,0,'h'] ],                        // "caja" (esquina cerrada)
-    [ [0,0,'h'], [0,2,'h'] ],                        // dos paredes separadas (paso angosto en el medio)
-  ];
-
   // ---------- logros (con categoría, tier, medalla, recompensa y progreso) ----------
   function totalWins(s){ return (s.winsBySlot||[0,0,0,0]).reduce((a,b)=>a+b,0); }
   function prog(cur, goal){ return [Math.max(0, Math.min(cur||0, goal)), goal]; }
@@ -201,6 +190,19 @@
   const moveModeBtn = document.getElementById('moveModeBtn');
   const wallModeBtn = document.getElementById('wallModeBtn');
   const hintLine = document.getElementById('hintLine');
+  const repeatMapBtn = document.getElementById('repeatMapBtn');
+  const winMapInfo = document.getElementById('winMapInfo');
+  const mazeRandomOptions = document.getElementById('mazeRandomOptions');
+  const mazeDensityGroup = document.getElementById('mazeDensityGroup');
+  const mazeDensityHint = document.getElementById('mazeDensityHint');
+  const mazeMineCheck = document.getElementById('mazeMineCheck');
+  const mazeMineCount = document.getElementById('mazeMineCount');
+  const mazeMinimap = document.getElementById('mazeMinimap');
+  const mazeMapName = document.getElementById('mazeMapName');
+  const mazeSeedText = document.getElementById('mazeSeedText');
+  const mazeDiceBtn = document.getElementById('mazeDiceBtn');
+  const editorSavePatternBtn = document.getElementById('editorSavePatternBtn');
+  const namePromptTitle = document.getElementById('namePromptTitle');
 
   const difficultyFieldset = document.getElementById('difficultyFieldset');
   const playersFieldset = document.getElementById('playersFieldset');
@@ -602,6 +604,7 @@
   function tryPlaceEnvWall(localState, r, c, orientation){
     const size = localState.size;
     if(r<0||c<0||r>size-2||c>size-2) return false;
+    if(localState.guard && localState.guard(r,c,orientation)) return false;   // zonas protegidas (salidas)
     if(localState.occupied[r][c]) return false;
     if(orientation==='h'){
       if(c>0 && localState.occupied[r][c-1]==='h') return false;
@@ -621,16 +624,370 @@
     localState.walls.push({ r, c, orientation, color:'var(--line)', env:true });
     return true;
   }
+  // ---------- Laberinto: patrones, transformaciones, equidad y semilla ----------
+  // Cada patrón es una lista de segmentos [r,c,'h'|'v'] sobre una cuadrícula de referencia de 9×9
+  // (posiciones de pared 0..7). Se escalan a cualquier tamaño y se transforman (4 giros × 2 espejos,
+  // más un desplazamiento de ±1 del patrón entero). Todo el sorteo sale de mulberry32(semilla).
+  const MAZE_REF = 9;
+  const SEED_SPACE = 2176782336;                 // 36^6: la semilla se muestra con 6 caracteres base36
+  const MAZE_DENSITIES = { ligero:'Ligero', medio:'Medio', denso:'Denso', caos:'Caos' };
+  // Reglas de equidad y zonas protegidas en un solo lugar para poder ajustarlas.
+  const MAZE_RULES = {
+    minExtra: 2,                 // cada camino debe superar en al menos 2 pasos al camino sin paredes...
+    capMult: 2,                  // ...sin pasar del doble
+    diffMax: { 1:0, 2:1, 3:2, 4:2 },   // diferencia máxima de distancia entre jugadores
+    strictExtra: false,          // true: sólo mapas donde TODOS cumplen minExtra (deja muy pocos patrones)
+    retries: 30,                 // reintentos al combinar patrones (Medio y Denso)
+    ligeroMaxSegs: 6,            // tope de segmentos del modo Ligero
+    // radio de la zona central sin paredes: 1 = 3×3, 0 = sólo la meta, -1 = sin zona (tableros chicos)
+    zoneRadius: function(size){ return size>=9 ? 1 : (size===7 ? 0 : -1); },
+  };
+  // Plantillas cortas (Medio y Caos): segmentos relativos a un punto de anclaje. Las originales se
+  // pisaban entre sí (dos tramos en posiciones vecinas) y nunca se podían colocar.
+  const MAZE_TEMPLATES = [
+    [ [0,0,'h'], [0,2,'h'] ],                       // barra de 2 tramos
+    [ [0,0,'v'], [2,0,'v'] ],                       // barra vertical de 2 tramos
+    [ [0,0,'h'], [1,1,'v'] ],                       // L
+    [ [0,0,'h'], [0,2,'h'], [1,1,'v'] ],            // T
+    [ [0,0,'h'], [0,3,'h'] ],                       // dos tramos con paso de una casilla
+  ];
+
+  function mulberry32(a){
+    return function(){
+      a |= 0; a = a + 0x6D2B79F5 | 0;
+      let t = Math.imul(a ^ a >>> 15, 1 | a);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+  }
+  function newMazeSeed(){ return Math.floor(Math.random()*SEED_SPACE); }
+  function seedToText(n){ return (n>>>0).toString(36).toUpperCase().padStart(6,'0'); }
+  function seedFromText(t){
+    const n = parseInt(String(t||'').trim().toLowerCase(), 36);
+    return Number.isFinite(n) ? n % SEED_SPACE : null;
+  }
+
+  function segKey(s){ return s[0]+','+s[1]+','+s[2]; }
+  function segsKey(segs){ return segs.map(segKey).sort().join('|'); }
+  function uniqSegs(segs){ const seen = new Set(), out = []; segs.forEach(s=>{ const k = segKey(s); if(!seen.has(k)){ seen.add(k); out.push(s); } }); return out; }
+  function hBar(r,c,n){ const a = []; for(let i=0;i<(n||1);i++) a.push([r,c+2*i,'h']); return a; }
+  function vBar(r,c,n){ const a = []; for(let i=0;i<(n||1);i++) a.push([r+2*i,c,'v']); return a; }
+  // giro de 90° horario: (r,c,o) → (c, m-r, otra orientación), con m = último índice de pared
+  function applyTransform(segs, size, rot, flip){
+    const m = size-2;
+    return segs.map(([r,c,o])=>{
+      if(flip) c = m-c;
+      for(let k=0;k<rot;k++){ const nr = c, nc = m-r; r = nr; c = nc; o = (o==='h' ? 'v' : 'h'); }
+      return [r,c,o];
+    });
+  }
+  function rot4(segs){ let out = [], cur = segs; for(let i=0;i<4;i++){ out = out.concat(cur); cur = applyTransform(cur, MAZE_REF, 1, false); } return uniqSegs(out); }
+  function rot2(segs){ return uniqSegs(segs.concat(applyTransform(segs, MAZE_REF, 2, false))); }
+  function detectSym(segs){
+    const base = segsKey(segs);
+    if(segsKey(applyTransform(segs, MAZE_REF, 1, false))===base) return 'c4';
+    return segsKey(applyTransform(segs, MAZE_REF, 2, false))===base ? 'c2' : null;
+  }
+
+  const MAZE_PATTERNS = [];
+  function defPattern(id, name, segs, touchesCenter){
+    segs = uniqSegs(segs);
+    MAZE_PATTERNS.push({ id, name, segs, touchesCenter:!!touchesCenter, sym:detectSym(segs) });
+  }
+  (function buildPatternLibrary(){
+    const anillo = rot4(hBar(1,1,3)).filter(s=> !(s[2]==='h' && s[0]===6));     // anillo de 5×5 sellado, sin el lado de abajo
+    const escalera = [[1,0,'h'],[2,1,'v'],[3,2,'h']];
+    defPattern('molino', 'Molino', rot4([[2,4,'h']]), true);                               // aspas alrededor de la meta
+    defPattern('cuatropuertas', 'Cuatro puertas', rot4([[1,2,'h'],[1,5,'h']]));            // anillo con una puerta por lado
+    defPattern('anillo', 'Anillo de una entrada', anillo);
+    defPattern('ciudadela', 'Ciudadela', anillo.concat([[4,3,'h'],[4,4,'v']]), true);       // anillo + 2 tramos internos
+    defPattern('peineh', 'Peine horizontal', hBar(0,5,2).concat(hBar(1,0,2), hBar(6,5,2), hBar(7,0,2)));
+    defPattern('peinev', 'Peine vertical', vBar(3,0,3).concat(vBar(0,1,3), vBar(3,6,3), vBar(0,7,3)));
+    defPattern('serpiente', 'Serpiente', rot2(hBar(1,0,3)));
+    defPattern('embudo', 'Embudo', escalera.concat([[1,7,'h'],[2,6,'v'],[3,5,'h']]), true);
+    defPattern('escalera', 'Escalera diagonal', escalera, true);
+    defPattern('dobleescalera', 'Doble escalera', rot2(escalera), true);
+    defPattern('corredor', 'Corredor central', vBar(2,2,2).concat(vBar(2,5,2)), true);
+    defPattern('camaras', 'Cámaras', rot2(hBar(2,0,1).concat(hBar(2,3,3))), true);
+    defPattern('islas', 'Islas', rot4([[1,1,'h'],[2,0,'v']]));
+    defPattern('pinzas', 'Pinzas', rot2([[1,2,'h'],[2,1,'v'],[3,2,'h']]), true);
+    defPattern('damero', 'Damero', rot4([[1,3,'h']]));
+    defPattern('rombo', 'Rombo', rot4([[1,4,'h'],[2,5,'v']]), true);
+    defPattern('trebol', 'Trébol', rot4([[2,1,'h'],[1,2,'v']]));
+    defPattern('torres', 'Torres', vBar(0,1,2).concat(vBar(4,6,2)));
+    defPattern('zigzag', 'Bordes en zigzag', [[1,0,'v'],[4,1,'v'],[1,7,'v'],[4,6,'v']]);
+    defPattern('puente', 'Puente', hBar(1,0,2).concat(hBar(1,5,2)));
+    defPattern('dobrepuente', 'Doble puente', rot2(hBar(1,0,3).concat(hBar(1,7,1))));
+    defPattern('cruz', 'Cruz abierta', rot4(vBar(1,5,2)), true);
+    defPattern('espiral', 'Espiral', [[2,3,'h']].concat(vBar(3,5,2), hBar(6,2,2), vBar(3,1,2)), true);
+    defPattern('pasillos', 'Pasillos cruzados', rot4([[2,0,'h'],[0,2,'v']]));
+    defPattern('bahias', 'Bahías', rot2([[0,0,'v'],[0,2,'v'],[0,7,'v']]));
+  })();
+
+  // Escala un patrón de 9×9 a otro tamaño. Cada barra (segmentos seguidos) se escala por su centro y
+  // conserva su largo en segmentos, así no se rompen las barras ni la simetría.
+  function scaleSegs(segs, size){
+    if(size===MAZE_REF) return segs.map(s=> s.slice());
+    const f = (size-2)/(MAZE_REF-2), m = size-2, out = [], used = new Set();
+    const has = new Set(segs.map(segKey));
+    const list = segs.slice().sort((a,b)=> a[2]!==b[2] ? (a[2]<b[2] ? -1 : 1) : (a[2]==='h' ? (a[0]-b[0] || a[1]-b[1]) : (a[1]-b[1] || a[0]-b[0])));
+    for(const s of list){
+      if(used.has(segKey(s))) continue;
+      const o = s[2], chain = [s]; used.add(segKey(s));
+      for(let cur = s;;){
+        const nx = o==='h' ? [cur[0], cur[1]+2, 'h'] : [cur[0]+2, cur[1], 'v'];
+        if(has.has(segKey(nx)) && !used.has(segKey(nx))){ chain.push(nx); used.add(segKey(nx)); cur = nx; } else break;
+      }
+      const n = chain.length, pos0 = o==='h' ? s[1] : s[0], line0 = o==='h' ? s[0] : s[1];
+      const centerS = Math.round((pos0+n-1)*f), lineS = Math.round(line0*f);
+      for(let i=0;i<n;i++){
+        const pos = centerS-(n-1)+2*i;
+        if(pos<0 || pos>m || lineS<0 || lineS>m) continue;
+        out.push(o==='h' ? [lineS,pos,'h'] : [pos,lineS,'v']);
+      }
+    }
+    return out;
+  }
+
+  // Gira/refleja una plantilla corta dentro de su propia caja y la deja anclada en (0,0).
+  function templateVariant(tpl, rng){
+    const m = Math.max(...tpl.map(s=> Math.max(s[0], s[1])));
+    const t = applyTransform(tpl, m+2, Math.floor(rng()*4), rng()<0.5);
+    const r0 = Math.min(...t.map(s=> s[0])), c0 = Math.min(...t.map(s=> s[1]));
+    return t.map(s=> [s[0]-r0, s[1]-c0, s[2]]);
+  }
+
+  // Patrón propio guardado desde el editor: coordenadas relativas, sin escalar.
+  function userPatternFrom(rec){
+    if(!rec || !Array.isArray(rec.walls) || !rec.walls.length || rec.walls.length>24) return null;
+    const segs = uniqSegs(rec.walls.map(w=> [w.r|0, w.c|0, w.orientation==='v' ? 'v' : 'h']));
+    return { id:'mine:'+segsKey(segs), name:String(rec.name||'Mi patrón').slice(0,24), segs, touchesCenter:false, sym:null, fixed:true };
+  }
+  const mazeVariantCache = new Map();
+  function patternVariants(pat, size){
+    const cacheKey = pat.id+'|'+size;
+    if(mazeVariantCache.has(cacheKey)) return mazeVariantCache.get(cacheKey);
+    const m = size-2, seen = new Set(), out = [];
+    const push = (segs, tf, off)=>{ const k = segsKey(segs); if(seen.has(k)) return; seen.add(k); out.push({ segs, tf, off }); };
+    if(pat.fixed){
+      const norm = segs=>{ const r0 = Math.min(...segs.map(s=>s[0])), c0 = Math.min(...segs.map(s=>s[1])); return segs.map(s=> [s[0]-r0, s[1]-c0, s[2]]); };
+      const base = norm(pat.segs), side = Math.max(...base.map(s=> Math.max(s[0], s[1])))+1;
+      for(let flip=0; flip<2; flip++) for(let rot=0; rot<4; rot++){
+        const t = norm(applyTransform(base, side+1, rot, !!flip));
+        const h = Math.max(...t.map(s=>s[0]))+1, w = Math.max(...t.map(s=>s[1]))+1;
+        for(let r0=0; r0+h<=m+1; r0++) for(let c0=0; c0+w<=m+1; c0++) push(t.map(s=> [s[0]+r0, s[1]+c0, s[2]]), rot+4*flip, [r0,c0]);
+      }
+    } else {
+      const base = scaleSegs(pat.segs, size);
+      for(let flip=0; flip<2; flip++) for(let rot=0; rot<4; rot++){
+        const t = applyTransform(base, size, rot, !!flip);
+        for(let dr=-1; dr<=1; dr++) for(let dc=-1; dc<=1; dc++){
+          const segs = t.map(s=> [s[0]+dr, s[1]+dc, s[2]]);
+          if(segs.some(s=> s[0]<0 || s[1]<0 || s[0]>m || s[1]>m)) continue;     // el desplazamiento nunca rompe la forma
+          push(segs, rot+4*flip, [dr,dc]);
+        }
+      }
+    }
+    if(mazeVariantCache.size>400) mazeVariantCache.clear();
+    mazeVariantCache.set(cacheKey, out);
+    return out;
+  }
+
+  // Contexto de un tablero: salidas según cantidad de jugadores, zonas protegidas y distancia libre.
+  const mazeContextCache = new Map();
+  function mazeContext(size, players){
+    const key = size+'|'+players;
+    if(mazeContextCache.has(key)) return mazeContextCache.get(key);
+    const mid = (size-1)/2, T = {r:0,c:mid}, B = {r:size-1,c:mid}, R = {r:mid,c:size-1}, L = {r:mid,c:0};
+    const seats = players<=1 ? [T] : players===2 ? [T,B] : players===3 ? [T,R,B] : [T,R,B,L];
+    const zr = MAZE_RULES.zoneRadius(size), zone = new Set();
+    if(zr>=0) for(let dr=-zr; dr<=zr; dr++) for(let dc=-zr; dc<=zr; dc++) zone.add((mid+dr)*size+(mid+dc));
+    const ctx = { size, players, mid, seats, prot:new Set(seats.map(s=> s.r*size+s.c)), zone,
+      free: seats.map(s=> Math.abs(s.r-mid)+Math.abs(s.c-mid)) };
+    mazeContextCache.set(key, ctx);
+    return ctx;
+  }
+  // Evalúa un conjunto de segmentos: colisiones, salidas y zona central protegidas, y distancia de cada
+  // salida a la meta (una sola BFS desde la meta). Devuelve null si no se puede colocar.
+  function mazeEval(ctx, segs, allowCenter){
+    const size = ctx.size, m = size-1;
+    const occ = new Uint8Array(m*m), right = new Uint8Array(size*size), down = new Uint8Array(size*size);
+    for(let i=0;i<segs.length;i++){
+      const r = segs[i][0], c = segs[i][1], o = segs[i][2];
+      if(r<0 || c<0 || r>=m || c>=m || occ[r*m+c]) return null;
+      if(o==='h'){ if(c>0 && occ[r*m+c-1]===1) return null; if(c<m-1 && occ[r*m+c+1]===1) return null; }
+      else { if(r>0 && occ[(r-1)*m+c]===2) return null; if(r<m-1 && occ[(r+1)*m+c]===2) return null; }
+      const a = r*size+c, b = a+1, d = a+size, e = d+1;               // las 4 casillas que toca el segmento
+      if(ctx.prot.has(a) || ctx.prot.has(b) || ctx.prot.has(d) || ctx.prot.has(e)) return null;
+      if(!allowCenter && (ctx.zone.has(a) || ctx.zone.has(b) || ctx.zone.has(d) || ctx.zone.has(e))) return null;
+      occ[r*m+c] = (o==='h' ? 1 : 2);
+      if(o==='h'){ down[a] = 1; down[b] = 1; } else { right[a] = 1; right[d] = 1; }
+    }
+    const dist = new Int16Array(size*size).fill(-1), q = new Int16Array(size*size);
+    const goal = ctx.mid*size+ctx.mid; dist[goal] = 0; let head = 0, tail = 0; q[tail++] = goal;
+    while(head<tail){
+      const cur = q[head++], r = (cur/size)|0, c = cur-r*size, nd = dist[cur]+1;
+      if(r>0 && !down[cur-size] && dist[cur-size]<0){ dist[cur-size] = nd; q[tail++] = cur-size; }
+      if(r<size-1 && !down[cur] && dist[cur+size]<0){ dist[cur+size] = nd; q[tail++] = cur+size; }
+      if(c>0 && !right[cur-1] && dist[cur-1]<0){ dist[cur-1] = nd; q[tail++] = cur-1; }
+      if(c<size-1 && !right[cur] && dist[cur+1]<0){ dist[cur+1] = nd; q[tail++] = cur+1; }
+    }
+    const dists = [];
+    for(const s of ctx.seats){ const d0 = dist[s.r*size+s.c]; if(d0<0) return null; dists.push(d0); }
+    return { dists };
+  }
+  // Regla de equidad. Devuelve null si el mapa no es aceptable, o {pref, diff}; pref = cumple el mínimo de +2 en todos.
+  function mazeJudge(ctx, d){
+    const R = MAZE_RULES; let mn = 1e9, mx = -1, pref = true;
+    for(let i=0;i<d.length;i++){
+      const f = ctx.free[i];
+      if(d[i] > f*R.capMult) return null;
+      if(d[i] < f+Math.min(R.minExtra, Math.max(1, f-1))) pref = false;
+      if(d[i]<mn) mn = d[i];
+      if(d[i]>mx) mx = d[i];
+    }
+    if(mx-mn > (R.diffMax[ctx.players] || 2)) return null;
+    if(R.strictExtra && !pref) return null;
+    return { pref, diff: mx-mn };
+  }
+  // Todas las variantes de un patrón que se pueden colocar y son equitativas (ok), y las que además cumplen +2 (pref).
+  const mazeTableCache = new Map();
+  function mazeTable(pat, ctx){
+    const key = pat.id+'|'+ctx.size+'|'+ctx.players;
+    if(mazeTableCache.has(key)) return mazeTableCache.get(key);
+    const variants = patternVariants(pat, ctx.size), ok = [], pref = [];
+    let placeable = 0;
+    for(const v of variants){
+      const ev = mazeEval(ctx, v.segs, pat.touchesCenter);
+      if(!ev) continue;
+      placeable++;
+      const j = mazeJudge(ctx, ev.dists);
+      if(!j) continue;
+      const item = { segs:v.segs, tf:v.tf, off:v.off, dists:ev.dists, pref:j.pref };
+      ok.push(item);
+      if(j.pref) pref.push(item);
+    }
+    const table = { total:variants.length, placeable, ok, pref };
+    if(mazeTableCache.size>400) mazeTableCache.clear();
+    mazeTableCache.set(key, table);
+    return table;
+  }
+  function mazePool(ctx, density, mine){
+    const list = MAZE_PATTERNS.filter(p=> ctx.players<3 || p.sym==='c4').concat(mine||[]);   // 3-4 jugadores: sólo simetría c4
+    return list.filter(p=>{
+      const t = mazeTable(p, ctx);
+      if(!t.ok.length) return false;
+      return density!=='ligero' || t.ok[0].segs.length<=MAZE_RULES.ligeroMaxSegs;
+    });
+  }
+  function pickVariant(rng, table){
+    const src = table.pref.length ? table.pref : table.ok;
+    return src[Math.floor(rng()*src.length)];
+  }
+
+  // Estado temporal para colocar y validar paredes con tryPlaceEnvWall (la misma rutina del juego).
+  function mazeScratch(ctx){
+    return { size:ctx.size, center:{r:ctx.mid, c:ctx.mid}, players:ctx.seats.map(s=> ({ r:s.r, c:s.c })),
+      occupied:Array.from({length:ctx.size-1}, ()=> Array(ctx.size-1).fill(null)), blockedEdges:new Set(), walls:[],
+      guard:(r,c)=>{ const a = r*ctx.size+c; return ctx.prot.has(a) || ctx.prot.has(a+1) || ctx.prot.has(a+ctx.size) || ctx.prot.has(a+ctx.size+1); } };
+  }
+  function mazeCommit(ctx, segs){
+    const local = mazeScratch(ctx);
+    for(const s of segs) if(!tryPlaceEnvWall(local, s[0], s[1], s[2]==='v' ? 'v' : 'h')) return null;
+    return local.walls.map(w=> ({ r:w.r, c:w.c, orientation:w.orientation }));
+  }
+
+  function mazeFromPatterns(ctx, rng, density, mine){
+    const R = MAZE_RULES, m = ctx.size-2;
+    let attempts = 0, rejected = 0, fallback = null;
+    const pool = mazePool(ctx, density, mine);
+    if(!pool.length) return { segs:[], names:[], attempts, rejected, fallback:'sin patrones utilizables' };
+    const first = pool[Math.floor(rng()*pool.length)], t1 = mazeTable(first, ctx), v1 = pickVariant(rng, t1);
+    attempts++;
+    let segs = v1.segs, allowCenter = first.touchesCenter;
+    const names = [first.name+' V'+(v1.tf+1)];
+    if(density==='medio'){
+      let done = false;
+      for(let i=0;i<R.retries && !done;i++){
+        attempts++;
+        const tpl = MAZE_TEMPLATES[Math.floor(rng()*MAZE_TEMPLATES.length)];
+        const t = templateVariant(tpl, rng);
+        const h = Math.max(...t.map(s=>s[0]))+1, w = Math.max(...t.map(s=>s[1]))+1;
+        const r0 = Math.floor(rng()*(m+2-h)), c0 = Math.floor(rng()*(m+2-w));
+        const cand = segs.concat(t.map(s=> [s[0]+r0, s[1]+c0, s[2]]));
+        const ev = mazeEval(ctx, cand, allowCenter), j = ev && mazeJudge(ctx, ev.dists);
+        if(j){ segs = cand; names.push('tramo corto'); done = true; } else rejected++;
+      }
+      if(!done) fallback = 'medio sin tramo (30 intentos fallidos)';
+    } else if(density==='denso'){
+      let done = false;
+      for(let i=0;i<R.retries && !done;i++){
+        attempts++;
+        const p2 = pool[Math.floor(rng()*pool.length)];
+        if(pool.length>1 && p2.id===first.id){ rejected++; continue; }
+        const v2 = pickVariant(rng, mazeTable(p2, ctx));
+        const cand = segs.concat(v2.segs), center = allowCenter || p2.touchesCenter;
+        const ev = mazeEval(ctx, cand, center), j = ev && mazeJudge(ctx, ev.dists);
+        if(j){ segs = cand; allowCenter = center; names.push(p2.name+' V'+(v2.tf+1)); done = true; } else rejected++;
+      }
+      if(!done) fallback = 'denso con un solo patrón (30 intentos fallidos)';
+    }
+    return { segs, names, attempts, rejected, fallback, allowCenter };
+  }
+
+  // Generador principal. Es una función pura de {size, players, density, seed, mine}: la misma entrada
+  // da siempre el mismo mapa, y eso es lo que usa el minimapa, la partida y "Repetir mapa".
+  function generateMaze(opts){
+    const size = opts.size, players = Math.max(1, Math.min(4, opts.players||2));
+    const density = MAZE_DENSITIES[opts.density] ? opts.density : 'medio';
+    const seed = (opts.seed==null || !Number.isFinite(+opts.seed)) ? newMazeSeed() : (Math.abs(Math.floor(+opts.seed)) % SEED_SPACE);
+    const rng = mulberry32(seed), ctx = mazeContext(size, players);
+    const mine = (opts.mine||[]).map(userPatternFrom).filter(Boolean);
+    let walls = null, name = 'Caos', attempts = 0, rejected = 0, fallback = null, allowCenter = true;
+    if(density!=='caos'){
+      const r = mazeFromPatterns(ctx, rng, density, mine);
+      attempts = r.attempts; rejected = r.rejected; fallback = r.fallback; allowCenter = r.allowCenter;
+      if(r.segs.length){
+        walls = mazeCommit(ctx, r.segs);
+        if(walls) name = r.names.join(' + '); else fallback = 'el patrón no se pudo colocar';
+      }
+    }
+    if(!walls){                                          // Caos, o último recurso si no hay patrón utilizable
+      // Como plan B se exige equidad: hasta 30 intentos de Caos y, si ninguno es parejo, el tablero queda limpio.
+      const tries = density==='caos' ? 1 : MAZE_RULES.retries;
+      let found = null;
+      for(let i=0;i<tries && !found;i++){
+        const local = mazeScratch(ctx);
+        const g = generateRandomWalls(local, 3+Math.floor(rng()*2), rng);
+        attempts += g.attempts; rejected += g.attempts-g.placed;
+        const list = local.walls.map(w=> ({ r:w.r, c:w.c, orientation:w.orientation }));
+        if(density==='caos'){ found = list; break; }
+        const ev = mazeEval(ctx, list.map(w=> [w.r, w.c, w.orientation]), true);
+        if(ev && mazeJudge(ctx, ev.dists)) found = list; else rejected++;
+      }
+      walls = found || [];
+      if(density!=='caos') fallback = (fallback ? fallback+' → ' : '')+(found ? 'Caos equitativo' : 'tablero limpio');
+      name = found ? 'Caos' : 'Sin paredes'; allowCenter = true;
+    }
+    const ev = mazeEval(ctx, walls.map(w=> [w.r, w.c, w.orientation]), true);
+    const dists = ev ? ev.dists : ctx.free.slice();
+    const j = mazeJudge(ctx, dists);
+    return { seed, seedText:seedToText(seed), size, players, density, name, walls, placed:walls.length, attempts, rejected, fallback,
+      stats:{ dists, free:ctx.free.slice(), diff:Math.max(...dists)-Math.min(...dists), fair:!!j, preferred:!!(j && j.pref) } };
+  }
+
+  // Generador "Caos": plantillas cortas en posiciones al azar, sin zonas ni equidad (el generador de antes).
+  // Devuelve {placed, attempts}: cuántas plantillas entraron y cuántos intentos hicieron falta.
   function generateRandomWalls(localState, count, rng){
     const random = rng || Math.random;
     const size = localState.size;
     let placed = 0, attempts = 0;
     while(placed < count && attempts < 200){
       attempts++;
-      const template = MAZE_TEMPLATES[Math.floor(random()*MAZE_TEMPLATES.length)];
+      const tpl = templateVariant(MAZE_TEMPLATES[Math.floor(random()*MAZE_TEMPLATES.length)], random);
       const baseR = Math.floor(random()*(size-1));
       const baseC = Math.floor(random()*(size-1));
-      const segs = template.map(([dr,dc,orientation])=> ({ r:baseR+dr, c:baseC+dc, orientation }));
+      const segs = tpl.map(([dr,dc,orientation])=> ({ r:baseR+dr, c:baseC+dc, orientation }));
       const snapshotOccupied = localState.occupied.map(row=> row.slice());
       const snapshotBlocked = new Set(localState.blockedEdges);
       const snapshotWallsLen = localState.walls.length;
@@ -646,7 +1003,7 @@
       }
       placed++;
     }
-    return placed;
+    return { placed, attempts };
   }
 
   function wallRect(r,c,orientation,cs){
@@ -1755,9 +2112,10 @@
     hintLine.classList.remove('thinking');
     if(state && state.winner){ hintLine.textContent=''; return; }
     const canPush = !!state && state.ruleset==='hill' && state.validMoves.some(m=> m.push);
-    hintLine.textContent = mode==='wall'
+    const mapTag = (state && state.mazeInfo && (state.moveCount||0) < state.players.length*2) ? 'Mapa: '+state.mazeInfo.name+'. ' : '';
+    hintLine.textContent = mapTag + (mode==='wall'
       ? 'Arrastrá sobre el tablero para ubicar la pared y soltá para confirmarla.'
-      : 'Tocá una casilla resaltada para moverte.' + (canPush ? ' La flecha empuja al rival.' : '');
+      : 'Tocá una casilla resaltada para moverte.' + (canPush ? ' La flecha empuja al rival.' : ''));
   }
   moveModeBtn.addEventListener('click', ()=> setMode('move'));
   wallModeBtn.addEventListener('click', ()=> setMode('wall'));
@@ -2205,7 +2563,8 @@
       }
       const rect = wallRect(w.r,w.c,w.orientation,cs);
       const rx = rect.h>rect.w ? rect.w*0.4 : rect.h*0.4;
-      wallsHTML += `<rect x="${rect.x}" y="${rect.y}" width="${rect.w}" height="${rect.h}" rx="${rx}" fill="${w.color}" stroke="rgba(0,0,0,0.3)" stroke-width="1"/>`;
+      const look = w.env ? 'fill="url(#stoneTex)" stroke="#2b2620" stroke-width="1.6"' : `fill="${w.color}" stroke="rgba(0,0,0,0.3)" stroke-width="1"`;
+      wallsHTML += `<rect x="${rect.x}" y="${rect.y}" width="${rect.w}" height="${rect.h}" rx="${rx}" ${look}${w.env ? ' class="map-wall"' : ''}/>`;
     }
     if(state.ruleset==='party' && state.powerUp){
       const pc=(state.powerUp.c+0.5)*cs, pr=(state.powerUp.r+0.5)*cs;
@@ -2361,8 +2720,15 @@
     winRewards.innerHTML = html;
     if(rw.coins>0) countUp(document.getElementById('winCoinCount'), 0, rw.coins, 900);
     renderWinGoal();
+    renderWinMapInfo();
     openOverlay('win');
     if(!p.isCPU) starRain();
+  }
+  function renderWinMapInfo(){
+    const mi = state && state.mazeInfo;
+    winMapInfo.classList.toggle('hidden', !mi);
+    repeatMapBtn.classList.toggle('hidden', !mi);
+    if(mi) winMapInfo.textContent = 'Mapa: '+mi.name+' · semilla '+mi.seedText;
   }
   function hideWinOverlay(){
     closeOverlay('win');
@@ -2458,7 +2824,10 @@
       options.presetWalls.forEach(w=> tryPlaceEnvWall(state, w.r, w.c, w.orientation));
       if(options.isCustomLevel) recordCustomLevelPlayed();
     } else if(ruleset==='maze' && !isDaily){
-      generateRandomWalls(state, 3 + Math.floor(Math.random()*2), Math.random);
+      const mine = Array.isArray(options.mazeMine) ? options.mazeMine : [];
+      const layout = generateMaze({ size, players:playersCount, density:options.mazeDensity||'medio', seed:options.mazeSeed, mine });
+      layout.walls.forEach(w=> tryPlaceEnvWall(state, w.r, w.c, w.orientation));
+      state.mazeInfo = { name:layout.name, seed:layout.seed, seedText:layout.seedText, density:layout.density, mine, fallback:layout.fallback };
     } else if(isDaily && Array.isArray(options.dailyWalls)){
       options.dailyWalls.forEach(w=> tryPlaceEnvWall(state, w.r, w.c, w.orientation));
     }
@@ -2765,9 +3134,92 @@
     const previous = customLevelSelect.value;
     const list = loadCustomLevels();
     customLevelSelect.innerHTML = '<option value="random">🎲 Paredes al azar</option>' +
-      list.map((lvl,i)=> `<option value="${i}">${escapeHtml(lvl.name)} (${lvl.size}×${lvl.size})</option>`).join('');
-    customLevelSelect.value = (previous!=='random' && list[+previous]) ? previous : 'random';
+      list.map((lvl,i)=> lvl.pattern ? '' : `<option value="${i}">${escapeHtml(lvl.name)} (${lvl.size}×${lvl.size})</option>`).join('');
+    customLevelSelect.value = (previous!=='random' && list[+previous] && !list[+previous].pattern) ? previous : 'random';
+    const nMine = loadUserPatterns().length;
+    mazeMineCount.textContent = nMine ? '('+nMine+')' : '(todavía no guardaste ninguno)';
+    mazeMineCheck.disabled = !nMine;
+    if(!nMine) mazeMineCheck.checked = false;
+    refreshMazePreview();
   }
+
+  // ---------- Laberinto en el menú: densidad, minimapa, dado y semilla ----------
+  const MAZE_DENSITY_HINTS = {
+    ligero:'Un patrón de hasta 6 tramos.',
+    medio:'Un patrón más un tramo corto.',
+    denso:'Dos patrones combinados.',
+    caos:'Tramos sueltos al azar, sin patrón.',
+  };
+  let mazeMenuSeed = newMazeSeed();
+  let menuMazeLayout = null;
+  function currentMazeDensity(){
+    const r = document.querySelector('input[name="mazeDensity"]:checked');
+    return r ? r.value : 'medio';
+  }
+  function loadUserPatterns(){ return loadCustomLevels().filter(l=> l && l.pattern && Array.isArray(l.walls) && l.walls.length); }
+  function mazeMenuOptions(){
+    return {
+      size: +document.querySelector('input[name="size"]:checked').value,
+      players: currentPlayersCount(),
+      density: currentMazeDensity(),
+      seed: mazeMenuSeed,
+      mine: mazeMineCheck.checked ? loadUserPatterns() : [],
+    };
+  }
+  // Vista previa SVG de 120×120: tablero, salidas de cada jugador, meta y paredes.
+  function mazeMinimapHTML(size, walls, seats){
+    const W = 120, cs = W/size, mid = (size-1)/2;
+    let h = `<rect width="${W}" height="${W}" rx="8" fill="var(--board)"/>`;
+    for(let r=0;r<size;r++) for(let c=0;c<size;c++){
+      if((r+c)%2===1) h += `<rect x="${(c*cs).toFixed(2)}" y="${(r*cs).toFixed(2)}" width="${cs.toFixed(2)}" height="${cs.toFixed(2)}" fill="var(--board-alt)"/>`;
+    }
+    seats.forEach((p,i)=>{
+      h += `<circle cx="${((p.c+0.5)*cs).toFixed(2)}" cy="${((p.r+0.5)*cs).toFixed(2)}" r="${(cs*0.3).toFixed(2)}" fill="${(PALETTE[i]||PALETTE[0]).color}" stroke="var(--panel)" stroke-width="1"/>`;
+    });
+    h += `<circle cx="${((mid+0.5)*cs).toFixed(2)}" cy="${((mid+0.5)*cs).toFixed(2)}" r="${(cs*0.38).toFixed(2)}" fill="none" stroke="var(--accent)" stroke-width="1.8"/>`;
+    const sw = Math.max(2.4, cs*0.2).toFixed(2);
+    walls.forEach(w=>{
+      const o = w.orientation;
+      const x1 = o==='h' ? w.c*cs : (w.c+1)*cs, y1 = o==='h' ? (w.r+1)*cs : w.r*cs;
+      const x2 = o==='h' ? (w.c+2)*cs : x1, y2 = o==='h' ? y1 : (w.r+2)*cs;
+      h += `<line x1="${x1.toFixed(2)}" y1="${y1.toFixed(2)}" x2="${x2.toFixed(2)}" y2="${y2.toFixed(2)}" stroke="#6b665a" stroke-width="${sw}" stroke-linecap="round"/>`;
+    });
+    return h;
+  }
+  function refreshMazePreview(){
+    if(currentRuleset()!=='maze') return;
+    const isCustom = customLevelSelect.value!=='random';
+    mazeRandomOptions.classList.toggle('hidden', isCustom);
+    mazeDiceBtn.classList.toggle('hidden', isCustom);
+    if(isCustom){
+      const lvl = loadCustomLevels()[+customLevelSelect.value];
+      if(lvl){
+        const seats = (lvl.players && lvl.players.length) ? lvl.players : mazeContext(lvl.size, 2).seats;
+        mazeMinimap.innerHTML = mazeMinimapHTML(lvl.size, lvl.walls||[], seats);
+        mazeMapName.textContent = lvl.name;
+        mazeSeedText.textContent = 'Nivel guardado';
+      }
+      return;
+    }
+    mazeDensityHint.textContent = MAZE_DENSITY_HINTS[currentMazeDensity()];
+    const opts = mazeMenuOptions();
+    const layout = generateMaze(opts);
+    menuMazeLayout = layout;
+    mazeMinimap.innerHTML = mazeMinimapHTML(opts.size, layout.walls, mazeContext(opts.size, opts.players).seats);
+    mazeMapName.textContent = 'Mapa: '+layout.name;
+    mazeSeedText.textContent = 'Semilla '+layout.seedText;
+  }
+  function saveMazePrefs(){
+    const cfg = loadLastSetup() || {};
+    cfg.mazeDensity = currentMazeDensity();
+    cfg.mazeMine = !!mazeMineCheck.checked;
+    saveLastSetup(cfg);
+  }
+  mazeDensityGroup.addEventListener('change', ()=>{ saveMazePrefs(); refreshMazePreview(); syncModeButton(); });
+  mazeMineCheck.addEventListener('change', ()=>{ saveMazePrefs(); refreshMazePreview(); });
+  mazeDiceBtn.addEventListener('click', ()=>{ mazeMenuSeed = newMazeSeed(); refreshMazePreview(); vibrate(8); });
+  document.getElementById('sizeGroup').addEventListener('change', refreshMazePreview);
+  customLevelSelect.addEventListener('change', refreshMazePreview);
 
   function defaultEditorPlayers(size,count){
     const mid=(size-1)/2;
@@ -2919,6 +3371,7 @@
         + '<div class="md-head"><span class="md-name">'+escapeHtml(r.label)+'</span><span class="stars-row" title="Complejidad">'+starsHTML(m.level,3,13)+'</span></div>'
         + '<p class="md-hint">'+escapeHtml(r.hint)+'</p>'
         + '<div class="md-tags"><span class="md-tag">'+players+'</span><span class="md-tag">'+who+'</span>'
+        + (pending==='maze' ? '<span class="md-tag">Densidad: '+MAZE_DENSITIES[currentMazeDensity()]+'</span>' : '')
         + (won(pending) ? '<span class="md-tag won"><img src="'+medalSrc(m.medal)+'" alt="">Ganado</span>' : '')
         + '</div></div>';
     }
@@ -3004,17 +3457,9 @@
 
   // ---------- desafío diario ----------
   function generateDailyLayout(dateStr, size){
-    const rng = hashStringToSeed('quoridor-daily-'+dateStr+'-'+size);
-    const mid = (size-1)/2;
-    const tempState = {
-      size, center:{ r:mid, c:mid },
-      players: [{ r:0, c:mid }],
-      occupied: Array.from({length:size-1}, ()=>Array(size-1).fill(null)),
-      blockedEdges: new Set(),
-      walls: [],
-    };
-    generateRandomWalls(tempState, 4, rng);
-    return tempState.walls.map(w=> ({ r:w.r, c:w.c, orientation:w.orientation }));
+    // la semilla del día sale del texto de la fecha: el mismo tablero para todos, ahora con patrones
+    const seed = Math.floor(hashStringToSeed('quoridor-daily-'+dateStr+'-'+size)() * SEED_SPACE);
+    return generateMaze({ size, players:1, density:'medio', seed }).walls;
   }
   function initDailyChallenge(){
     const dateStr = todayKey();
@@ -3236,7 +3681,12 @@
   function renderEditorLevelsList(){
     const list = loadCustomLevels();
     if(!list.length){ editorLevelsList.innerHTML = '<p class="field-hint">Todavía no guardaste ningún nivel.</p>'; return; }
-    editorLevelsList.innerHTML = list.map((lvl,i)=> `
+    editorLevelsList.innerHTML = list.map((lvl,i)=> lvl.pattern ? `
+      <div class="editor-level-row">
+        <span class="lvl-name">🧱 ${escapeHtml(lvl.name)} <small>(patrón · ${(lvl.walls||[]).length} tramos)</small></span>
+        <button type="button" class="kbtn grey small" data-act="load" data-i="${i}">Cargar</button>
+        <button type="button" class="kbtn red small" data-act="del" data-i="${i}">Borrar</button>
+      </div>` : `
       <div class="editor-level-row">
         <span class="lvl-name">${escapeHtml(lvl.name)} (${lvl.size}×${lvl.size})</span>
         <button type="button" class="kbtn grey small" data-act="load" data-i="${i}">Cargar</button>
@@ -3253,6 +3703,16 @@
     if(!lvl) return;
     if(btn.dataset.act==='del'){
       list.splice(i,1); saveCustomLevels(list); renderEditorLevelsList();
+    } else if(btn.dataset.act==='load' && lvl.pattern){
+      // un patrón guardado se carga pegado a la esquina de arriba a la izquierda
+      editorReset(editorState.size);
+      (lvl.walls||[]).forEach(w=>{
+        if(w.r<=editorState.size-2 && w.c<=editorState.size-2 && editorCanPlaceWallSlot(w.r,w.c,w.orientation)){
+          editorState.occupied[w.r][w.c]=w.orientation; editorState.walls.push({ r:w.r, c:w.c, orientation:w.orientation });
+        }
+      });
+      renderEditor();
+      editorFeedback.textContent = `Cargaste el patrón "${lvl.name}". Lo que no entra en este tamaño se omite.`;
     } else if(btn.dataset.act==='load'){
       editorSizeSelect.value = String(lvl.size);
       editorReset(lvl.size);
@@ -3276,13 +3736,35 @@
   editorClearBtn.addEventListener('click', ()=>{ editorReset(editorState.size); renderEditor(); editorFeedback.textContent='Tablero limpio.'; });
   editorSaveBtn.addEventListener('click', ()=>{
     if(!editorValidate()){ editorFeedback.textContent='El diseño no es válido: revisá las posiciones de los jugadores, el objetivo, que todos tengan camino posible o la cantidad de jugadores que pide el modo elegido.'; return; }
-    levelNameInput.value = 'Mi nivel';
-    openOverlay('namePrompt');                       // modal propio: prompt() no es confiable en un WebView
-    setTimeout(()=>{ try{ levelNameInput.focus(); levelNameInput.select(); }catch(e){} }, 60);
+    openNamePrompt('level');                         // modal propio: prompt() no es confiable en un WebView
   });
+  let namePromptMode = 'level';
+  function openNamePrompt(mode){
+    namePromptMode = mode;
+    namePromptTitle.textContent = mode==='pattern' ? 'Nombre del patrón' : 'Nombre del nivel';
+    levelNameInput.value = mode==='pattern' ? 'Mi patrón' : 'Mi nivel';
+    openOverlay('namePrompt');
+    setTimeout(()=>{ try{ levelNameInput.focus(); levelNameInput.select(); }catch(e){} }, 60);
+  }
+  editorSavePatternBtn.addEventListener('click', ()=>{
+    if(!editorState.walls.length){ editorFeedback.textContent = 'Poné al menos una pared para guardar un patrón.'; return; }
+    if(editorState.walls.length>24){ editorFeedback.textContent = 'Un patrón puede tener hasta 24 tramos.'; return; }
+    openNamePrompt('pattern');
+  });
+  function saveEditorPattern(name){
+    // coordenadas relativas: la pared más arriba y más a la izquierda pasa a ser (0,0)
+    const r0 = Math.min(...editorState.walls.map(w=> w.r)), c0 = Math.min(...editorState.walls.map(w=> w.c));
+    const list = loadCustomLevels();
+    list.push({ name:name.slice(0,24), pattern:true, size:editorState.size,
+      walls: editorState.walls.map(w=> ({ r:w.r-r0, c:w.c-c0, orientation:w.orientation })) });
+    saveCustomLevels(list);
+    renderEditorLevelsList();
+    editorFeedback.textContent = 'Patrón guardado. Entra en el sorteo del Laberinto si tildás "Incluir mis patrones".';
+  }
   function confirmLevelName(){
     const name = (levelNameInput.value || '').trim();
     if(!name){ levelNameInput.focus(); return; }
+    if(namePromptMode==='pattern'){ saveEditorPattern(name); closeOverlay('namePrompt'); namePromptMode = 'level'; return; }
     const list = loadCustomLevels();
     list.push({ name: name.slice(0,24), size: editorState.size, objective: Object.assign({}, editorState.objective), turnTime: editorState.turnTime||0, ruleset: editorState.ruleset||'classic',
       players: editorState.players.map(p=>({ r:p.r, c:p.c, walls:p.walls, isCPU:!!p.isCPU, difficulty:p.difficulty||'easy' })),
@@ -3293,7 +3775,7 @@
     closeOverlay('namePrompt');
   }
   levelNameOkBtn.addEventListener('click', confirmLevelName);
-  levelNameCancelBtn.addEventListener('click', ()=> closeOverlay('namePrompt'));
+  levelNameCancelBtn.addEventListener('click', ()=>{ closeOverlay('namePrompt'); namePromptMode = 'level'; });
   levelNameInput.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); confirmLevelName(); } });
   editorPlayBtn.addEventListener('click', ()=>{
     if(!editorValidate()){
@@ -3368,7 +3850,7 @@
   moreLinkBtn.addEventListener('click', ()=> openOverlay('more'));
   closeMoreBtn.addEventListener('click', ()=> closeOverlay('more'));
   closeSkinsBtn.addEventListener('click', ()=> updateMenuVisibility());
-  function doRestart(){
+  function doRestart(sameMap){
     if(!state) return;
     if(state.isDaily){ hideWinOverlay(); closeOverlay('pause'); initDailyChallenge(); return; }
     const cfg = {
@@ -3380,6 +3862,11 @@
       presetWalls: state.presetWalls, isCustomLevel: state.isCustomLevel, objective: state.objective,
       turnTimeSeconds: state.turnTimeSeconds, playerConfigs: state.playerConfigs,
     };
+    if(state.mazeInfo){
+      cfg.mazeDensity = state.mazeInfo.density;
+      cfg.mazeMine = state.mazeInfo.mine;
+      if(sameMap===true) cfg.mazeSeed = state.mazeInfo.seed;      // "Repetir mapa": misma semilla, mismo mapa
+    }
     const playersCount = state.players.length;
     const size = state.size;
     hideWinOverlay();
@@ -3408,9 +3895,12 @@
       if(inp){ names[i] = inp.value.trim(); }
     }
     savePlayerNames(names);
-    saveLastSetup({ playersCount, size: +document.querySelector('input[name="size"]:checked').value, mode:m, difficulty, ruleset });
+    saveLastSetup({ playersCount, size: +document.querySelector('input[name="size"]:checked').value, mode:m, difficulty, ruleset,
+      mazeDensity: currentMazeDensity(), mazeMine: !!mazeMineCheck.checked });
 
-    initGame(playersCount, size, { isCpu, difficulty, names, ruleset, presetWalls, isCustomLevel });
+    const mazeOpts = (ruleset==='maze' && !presetWalls) ? { mazeSeed: mazeMenuSeed, mazeDensity: currentMazeDensity(), mazeMine: mazeMineCheck.checked ? loadUserPatterns() : [] } : {};
+    initGame(playersCount, size, Object.assign({ isCpu, difficulty, names, ruleset, presetWalls, isCustomLevel }, mazeOpts));
+    mazeMenuSeed = newMazeSeed();                    // el próximo mapa del menú ya es otro
     menuScreen.classList.add('hidden');
     gameScreen.classList.remove('hidden');
   });
@@ -3432,7 +3922,8 @@
     }
   });
 
-  playAgainBtn.addEventListener('click', doRestart);
+  playAgainBtn.addEventListener('click', ()=> doRestart());
+  repeatMapBtn.addEventListener('click', ()=> doRestart(true));
   changeConfigBtn.addEventListener('click', goToMenu);
 
   // ---------- botón físico "atrás" de Android (ver MainActivity.java) ----------
@@ -3480,8 +3971,17 @@
     if(cfg.ruleset && RULESETS[cfg.ruleset]){
       rulesetSelect.value = cfg.ruleset;
     }
+    if(cfg.mazeDensity && MAZE_DENSITIES[cfg.mazeDensity]){
+      const dr = document.querySelector('input[name="mazeDensity"][value="'+cfg.mazeDensity+'"]'); if(dr) dr.checked = true;
+    }
+    if(cfg.mazeMine) mazeMineCheck.checked = true;
   })();
 
+  if(window.__QUORIDOR_TEST__){
+    window.__quoridorMaze = { generateMaze, generateRandomWalls, tryPlaceEnvWall, MAZE_PATTERNS, MAZE_RULES, MAZE_DENSITIES, MAZE_TEMPLATES,
+      mazeContext, mazeTable, mazePool, mazeEval, mazeJudge, userPatternFrom, seedToText, seedFromText, generateDailyLayout, hashStringToSeed, SEED_SPACE,
+      getState:()=> state, bfsShortestPath, openOverlay, closeOverlay };
+  }
   modePicker.build();
   updateMenuVisibility();
   updateBadges();

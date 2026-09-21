@@ -562,3 +562,17 @@ legend{ font-weight:600; margin-bottom:10px; font-size:.9rem; color:var(--ink-so
   .mc-name{ font-size:.72rem; }
   .modes-grid{ gap:8px; }
 }
+
+/* ---------- Laberinto: densidad, minimapa, dado y semilla ---------- */
+.maze-density{ margin-top:10px; }
+.check-row{ display:flex; align-items:center; gap:10px; margin:12px 2px 0; font-size:.88rem; color:var(--ink); cursor:pointer; }
+.check-row input{ width:20px; height:20px; flex:0 0 auto; accent-color:var(--accent); }
+.check-row small{ color:var(--ink-soft); }
+.check-row input:disabled + span{ opacity:.6; }
+.maze-preview{ display:flex; gap:14px; align-items:center; margin-top:14px; }
+.maze-preview svg{ flex:0 0 auto; border-radius:8px; border:1.5px solid var(--line); background:var(--panel-2); }
+.maze-preview-side{ min-width:0; display:flex; flex-direction:column; gap:6px; align-items:flex-start; }
+.maze-map-name{ font-weight:700; font-size:.92rem; overflow-wrap:anywhere; }
+.maze-seed{ font:600 .78rem/1.2 ui-monospace,Menlo,Consolas,monospace; color:var(--ink-soft); letter-spacing:.05em; }
+.maze-dice{ display:inline-flex; align-items:center; gap:6px; }
+.win-map{ margin:6px 0 0; font-size:.85rem; color:var(--ink-soft); }
