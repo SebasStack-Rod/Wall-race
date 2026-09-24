@@ -6,7 +6,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="theme-color" content="#efe9dc">
+<meta name="theme-color" content="#1a1410">
 <title>Quoridor · Carrera al centro</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -42,6 +42,33 @@
         <input type="radio" name="difficulty" id="diffExpert" value="expert"><label for="diffExpert" aria-label="Experto" title="Experto"><span class="stars-row"><img src="assets/ui/star.png" alt=""><img src="assets/ui/star.png" alt=""><img src="assets/ui/star.png" alt=""><img src="assets/ui/star.png" alt=""></span></label>
       </div>
       <p class="field-hint" id="difficultyHint"></p>
+    </fieldset>
+
+    <fieldset id="roleFieldset" class="hidden">
+      <legend>Tu rol</legend>
+      <div class="segmented" id="roleGroup">
+        <input type="radio" name="hrole" id="roleFugitive" value="fugitive" checked><label for="roleFugitive">🏃 Fugitivo</label>
+        <input type="radio" name="hrole" id="roleHunter" value="hunter"><label for="roleHunter">🏹 Cazador</label>
+      </div>
+      <p class="field-hint">La IA juega el otro rol. El fugitivo gana llegando al centro; el cazador, atrapándolo o agotando las rondas.</p>
+    </fieldset>
+
+    <fieldset id="teamSetupFieldset" class="hidden">
+      <legend>Quién juega el 2v2</legend>
+      <div class="segmented" id="teamSetupGroup">
+        <input type="radio" name="tsetup" id="tsLocal" value="local" checked><label for="tsLocal">👥 4 personas</label>
+        <input type="radio" name="tsetup" id="tsAlly" value="ally"><label for="tsAlly">🤖 Yo + IA contra 2 IA</label>
+      </div>
+      <p class="field-hint">Con «Yo + IA», tu aliado y los dos rivales los juega la IA con la dificultad elegida. La IA aliada evita las paredes que alarguen tu camino.</p>
+    </fieldset>
+
+    <fieldset id="teamGoalFieldset" class="hidden">
+      <legend>Objetivo del equipo</legend>
+      <div class="segmented" id="teamGoalGroup">
+        <input type="radio" name="tgoal" id="tgFirst" value="first" checked><label for="tgFirst">🏁 El primero que llega</label>
+        <input type="radio" name="tgoal" id="tgBoth" value="both"><label for="tgBoth">🤝 Deben llegar los dos</label>
+      </div>
+      <p class="field-hint" id="teamGoalHint"></p>
     </fieldset>
 
     <fieldset id="playersFieldset">
@@ -144,6 +171,7 @@
   <div class="mode-toggle" id="modeToggle">
     <button type="button" class="kbtn small mode-btn active" id="moveModeBtn" data-mode="move">🚶 Mover</button>
     <button type="button" class="kbtn small mode-btn" id="wallModeBtn" data-mode="wall">🧱 Colocar pared</button>
+    <button type="button" class="kbtn small mode-btn hidden" id="sprintBtn" aria-label="Sprint: paso doble en línea recta"><img class="btn-ico" src="assets/emotes/icons/exclamations.png" alt=""> Sprint <span id="sprintCount">2</span></button>
   </div>
   <p class="hint-line" id="hintLine">Tocá una casilla resaltada para moverte.</p>
 
@@ -162,11 +190,22 @@
             <path d="M0 8H16M8 0V8M4 8V16M12 0V8" stroke="#57534a" stroke-width=".9" fill="none"/>
             <circle cx="3" cy="3" r=".8" fill="#b5b0a3"/><circle cx="12" cy="12" r=".8" fill="#b5b0a3"/>
           </pattern>
+          <!-- niebla de guerra: gradiente radial (relativo al propio círculo) usado como máscara -->
+          <radialGradient id="fogGrad">
+            <stop offset="0%" stop-color="black"/>
+            <stop offset="65%" stop-color="black"/>
+            <stop offset="100%" stop-color="white"/>
+          </radialGradient>
+          <mask id="fogMask" maskUnits="userSpaceOnUse" x="0" y="0" width="630" height="630">
+            <rect x="0" y="0" width="630" height="630" fill="white"/>
+            <circle id="fogMaskHole" cx="315" cy="315" r="140" fill="url(#fogGrad)"/>
+          </mask>
         </defs>
         <g id="gridGroup"></g>
         <g id="movesGroup"></g>
         <g id="wallsGroup"></g>
         <g id="piecesGroup"></g>
+        <rect id="fogOverlay" x="0" y="0" width="630" height="630" fill="rgba(10,12,22,0.7)" mask="url(#fogMask)" opacity="0" pointer-events="none"></rect>
         <g id="emotesGroup" pointer-events="none"></g>
         <rect id="wallPreview" x="0" y="0" width="0" height="0" fill="transparent" opacity="0" pointer-events="none"></rect>
       </svg>
@@ -175,6 +214,7 @@
 
     <aside class="side-panel">
       <h3>Jugadores</h3>
+      <div id="teamHud" class="team-hud hidden" aria-live="polite"></div>
       <ul id="playersList"></ul>
     </aside>
   </div>
@@ -203,11 +243,22 @@
 <div id="pauseOverlay" class="overlay-backdrop hidden">
   <div class="modal-card" id="pauseCard">
     <h2>Pausa</h2>
+    <p class="pause-notice hidden" id="pauseNotice" role="status" aria-live="polite"></p>
     <div class="modal-actions">
       <button class="kbtn yellow big block" id="resumeBtn">Continuar</button>
       <button class="kbtn grey block" id="settingsBtn">⚙️ Ajustes</button>
       <button class="kbtn grey block" id="restartBtn">Reiniciar</button>
       <button class="kbtn red block" id="menuBtn">Salir al menú</button>
+    </div>
+  </div>
+</div>
+
+<div id="handoffOverlay" class="overlay-backdrop hidden">
+  <div class="modal-card" id="handoffCard">
+    <h2 id="handoffTitle">Pasá el celular</h2>
+    <p id="handoffMsg">El siguiente jugador toma el control.</p>
+    <div class="modal-actions">
+      <button class="kbtn yellow big block" id="handoffReadyBtn">Listo</button>
     </div>
   </div>
 </div>
@@ -273,6 +324,10 @@
     <div class="settings-row">
       <span>Volumen de efectos <b id="sfxVolLabel" class="vol-label"></b></span>
       <div class="kslider-wrap" id="sfxWrap"><div class="kbar"><i></i></div><input type="range" class="kslider" id="sfxVolume" min="0" max="100" step="5" value="80" aria-label="Volumen de efectos"></div>
+    </div>
+    <div class="settings-row hidden" id="musicRow">
+      <span>Volumen de música <b id="musicVolLabel" class="vol-label"></b></span>
+      <div class="kslider-wrap" id="musicWrap"><div class="kbar"><i></i></div><input type="range" class="kslider" id="musicVolume" min="0" max="100" step="5" value="60" aria-label="Volumen de música"></div>
     </div>
     <label class="settings-check"><input type="checkbox" class="kcheck" id="vibrateToggle"><span>Vibración</span></label>
     <label class="settings-check"><input type="checkbox" class="kcheck" id="showMovesToggle"><span>Mostrar movimientos posibles</span></label>

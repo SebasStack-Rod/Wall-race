@@ -1,0 +1,2 @@
+Poné tu pista de fondo acá con el nombre musica.mp3 (o musica.ogg / musica.m4a).
+Se reproduce en bucle y se controla desde Ajustes > Volumen de música.

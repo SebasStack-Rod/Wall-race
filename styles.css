@@ -185,6 +185,8 @@ legend{ font-weight:600; margin-bottom:10px; font-size:.9rem; color:var(--ink-so
 .mode-toggle{ display:flex; gap:8px; margin:0 0 8px; }
 .mode-btn{ flex:1; font-size:.78rem; white-space:nowrap; }
 .mode-btn:not(.active){ }
+.mode-btn .btn-ico{ width:16px; height:16px; flex:none; }
+#sprintBtn{ flex:0 0 auto; }
 .mode-btn.active{ --img:url(assets/ui/btn-yellow-rect.png); --img-down:url(assets/ui/btn-yellow-rect-down.png); --btn-ink:#3b2a05; }
 .game-layout{ display:flex; gap:22px; align-items:flex-start; flex-wrap:wrap; }
 .board-wrap{ flex:1 1 420px; max-width:560px; background:var(--panel); padding:16px; border-radius:20px; box-shadow:0 14px 32px var(--shadow); border:1px solid var(--line); }
@@ -359,6 +361,18 @@ legend{ font-weight:600; margin-bottom:10px; font-size:.9rem; color:var(--ink-so
 .turn-timer{ font-weight:700; font-size:.86rem; padding:3px 10px; border-radius:999px; background:var(--panel-2); border:1px solid var(--line); margin-left:8px; }
 .turn-timer.low{ color:var(--danger); border-color:var(--danger); }
 
+/* Contrarreloj: aro de tiempo alrededor de la ficha activa, barras del reloj de ajedrez y aviso de pausa */
+.clock-ring-track, .clock-ring{ pointer-events:none; }
+.clock-ring.low{ stroke:var(--danger); animation:hillArcPulse .8s ease-in-out infinite; }
+.player-row.has-clock{ flex-wrap:wrap; }
+.clock-line{ flex:0 0 100%; display:flex; align-items:center; gap:8px; }
+.clock-track{ flex:1; height:8px; border-radius:999px; background:var(--panel-2); border:1px solid var(--line); overflow:hidden; }
+.clock-fill{ display:block; height:100%; border-radius:999px; background:var(--pc, var(--accent)); }
+.clock-time{ min-width:36px; text-align:right; font-size:.76rem; font-weight:700; font-variant-numeric:tabular-nums; }
+.clock-line.low .clock-fill{ background:var(--danger); }
+.clock-line.low .clock-time{ color:var(--danger); }
+.modal-card p.pause-notice{ margin:0 0 4px; padding:10px 12px; border-radius:12px; border:1.5px solid var(--danger); background:var(--panel-2); color:var(--ink); font-size:.86rem; line-height:1.4; text-align:left; }
+
 /* ================= EDITOR ================= */
 #editorScreen{ width:100%; max-width:900px; }
 .editor-toolbar{ display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; align-items:center; }
@@ -388,6 +402,12 @@ legend{ font-weight:600; margin-bottom:10px; font-size:.9rem; color:var(--ink-so
 .center-glow{ transform-box:fill-box; transform-origin:center; animation:centerGlow 2.6s ease-in-out infinite; }
 @keyframes movePulse{ 0%,100%{ opacity:.55; } 50%{ opacity:.95; } }
 .move-dot{ animation:movePulse 1.4s ease-in-out infinite; pointer-events:none; }
+.trail-dot{ animation:movePulse 1.4s ease-in-out infinite; pointer-events:none; }   /* huellas del fugitivo */
+/* Niebla de guerra: la máscara sigue a la ficha con una transición suave en vez de un corte brusco */
+#fogMaskHole{ transition:cx 150ms ease, cy 150ms ease, r 150ms ease; }
+#fogOverlay{ transition:opacity 200ms ease; }
+.fog-echo{ filter:saturate(.6); }   /* eco de un rival fuera de radio: la opacidad (según su vida) la fija el propio render */
+
 @keyframes turnRing{ 0%,100%{ opacity:.25; transform:scale(1); } 50%{ opacity:.55; transform:scale(1.16); } }
 .turn-ring{ transform-box:fill-box; transform-origin:center; animation:turnRing 1.8s ease-in-out infinite; }
 #piecesGroup{ pointer-events:none; }   /* las fichas no tapan los clics: hace falta para tocar la casilla de un rival y empujarlo */
@@ -541,6 +561,14 @@ legend{ font-weight:600; margin-bottom:10px; font-size:.9rem; color:var(--ink-so
 .md-tags{ display:flex; flex-wrap:wrap; gap:6px; }
 .md-tag{ display:inline-flex; align-items:center; gap:4px; padding:3px 9px; border-radius:999px; border:1px solid var(--line); background:var(--panel); font-size:.68rem; font-weight:600; }
 .md-tag.won{ border-color:var(--accent); }
+/* panel de Contrarreloj dentro del detalle del modo */
+.md-config{ display:flex; flex-direction:column; gap:8px; margin-top:10px; padding-top:10px; border-top:1px solid var(--line); }
+.md-config-row{ display:flex; flex-direction:column; gap:4px; }
+.md-config-label{ font-size:.72rem; font-weight:700; color:var(--ink-soft); }
+.md-config .segmented label{ flex:1 1 0; min-width:0; font-size:.74rem; text-align:center; }
+.md-config .segmented.is-off{ opacity:.5; }
+.mode-detail .md-config-note{ margin:0; font-size:.72rem; line-height:1.35; color:var(--ink-soft); }
+.mode-detail .md-config-note:empty{ display:none; }
 .md-tag img{ width:14px; height:auto; }
 @keyframes modeCardIn{ from{ opacity:0; transform:translateY(16px) scale(.9); } to{ opacity:1; transform:none; } }
 @keyframes platePop{ 0%{ transform:scale(.8); } 60%{ transform:scale(1.14); } 100%{ transform:scale(1); } }
@@ -576,3 +604,61 @@ legend{ font-weight:600; margin-bottom:10px; font-size:.9rem; color:var(--ink-so
 .maze-seed{ font:600 .78rem/1.2 ui-monospace,Menlo,Consolas,monospace; color:var(--ink-soft); letter-spacing:.05em; }
 .maze-dice{ display:inline-flex; align-items:center; gap:6px; }
 .win-map{ margin:6px 0 0; font-size:.85rem; color:var(--ink-soft); }
+
+
+/* ================= FONDO DE JUEGO (tomado de "juego 1.0") =================
+   Imagen desenfocada y fija detrás de todo, con velo oscuro según el tema para que las
+   tarjetas se lean bien. Hay una versión horizontal (compu / celu acostado) y una vertical (celu). */
+:root{ --veil-a:.52; --veil-b:.66; }
+:root[data-theme="dark"]{ --veil-a:.66; --veil-b:.80; }
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){ --veil-a:.66; --veil-b:.80; } }
+html{ background:#1a1410; }                          /* color de respaldo mientras carga la imagen */
+body{ background:none; isolation:isolate; }
+body::before{
+  content:""; position:fixed; inset:0; z-index:-2; pointer-events:none;
+  background:#2a2016 url(assets/bg/fondo-desktop.jpg) center / cover no-repeat;
+}
+body::after{
+  content:""; position:fixed; inset:0; z-index:-1; pointer-events:none;
+  background:
+    radial-gradient(ellipse at 50% 38%, transparent 30%, rgba(8,5,3,.42) 100%),
+    linear-gradient(rgba(16,11,7,var(--veil-a)), rgba(16,11,7,var(--veil-b)));
+}
+@media (orientation: portrait), (max-width: 640px){
+  body::before{ background-image:url(assets/bg/fondo-mobile.jpg); }
+}
+
+/* Lo que antes flotaba directo sobre el fondo claro (barra de turno, ayuda, herramientas del editor)
+   ahora va en su propia tarjeta para que se lea sobre el fondo oscuro. */
+#gameScreen .game-header, #editorScreen .game-header{
+  background:var(--panel); border:1px solid var(--line); border-radius:18px;
+  padding:10px 14px; box-shadow:0 10px 26px var(--shadow);
+}
+#gameScreen .hint-line, #editorScreen .hint-line{
+  background:var(--panel); border:1px solid var(--line); border-radius:14px;
+  padding:8px 14px; box-shadow:0 8px 20px var(--shadow);
+}
+.editor-toolbar{
+  background:var(--panel); border:1px solid var(--line); border-radius:16px;
+  padding:10px 12px; box-shadow:0 8px 20px var(--shadow);
+}
+.menu-card{ box-shadow:0 24px 60px rgba(0,0,0,.5); }
+.board-wrap, .side-panel{ box-shadow:0 18px 40px rgba(0,0,0,.42); }
+
+/* pantallas grandes: el contenido no queda pegado arriba ni se estira de más */
+@media (min-width: 1100px){
+  body{ padding-top:36px; padding-bottom:36px; }
+}
+
+/* ---------- 2v2: identidad de equipo, marcador y reserva compartida ---------- */
+.team-dot{ display:inline-block; width:13px; height:13px; border-radius:50%; box-sizing:border-box; flex:0 0 auto; }
+.team-A .team-dot{ border:3px solid #fff; box-shadow:0 0 0 1px rgba(0,0,0,.55), inset 0 0 0 1px rgba(0,0,0,.35); }
+.team-B .team-dot{ border:3px dashed #16161a; box-shadow:0 0 0 1px rgba(255,255,255,.65); background:rgba(255,255,255,.35); }
+.cpu-tag.team-tag{ gap:5px; }
+.team-hud{ display:flex; gap:8px; margin:0 0 12px; }
+.team-chip{ flex:1 1 0; min-width:0; display:flex; align-items:center; flex-wrap:wrap; gap:4px 7px; padding:8px 10px; border-radius:12px; background:var(--panel-2); border:2px solid transparent; font-size:.8rem; transition:border-color 150ms; }
+.team-chip.active{ border-color:var(--accent); }
+.team-chip b{ font-weight:700; }
+.team-prog, .team-walls{ font-weight:700; font-size:.76rem; color:var(--ink-soft); white-space:nowrap; }
+.team-walls{ margin-left:auto; color:var(--ink); }
+.team-ring{ transition:stroke-width 150ms; }
