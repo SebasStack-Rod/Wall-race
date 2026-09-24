@@ -3,6 +3,17 @@
 
   const BOARD_PX = 630;
   const DIRS4 = [[-1,0],[1,0],[0,-1],[0,1]];
+  // ---------- 2v2: identidad de equipo (48) y compensación de orden (50) ----------
+  // Los colores de las fichas son libres (skins), así que el equipo se marca con un anillo aparte: A = blanco continuo,
+  // B = negro punteado (la forma del trazo distingue el equipo aunque no se vean bien los colores).
+  const TEAM_STYLE = {
+    A: { color:'#ffffff', halo:'rgba(0,0,0,.55)',       dash:'' },
+    B: { color:'#16161a', halo:'rgba(255,255,255,.65)', dash:'5 4' },
+  };
+  const TEAM_RING_PX = 3;
+  // Paredes extra para el equipo que juega segundo. Valor medido con la simulación (ver informe de la ronda 6).
+  const TEAM_SECOND_WALLS = 1;
+
   const PALETTE = [
     { name:'Jugador 1', color:'#d64550', shape:'circle' },
     { name:'Jugador 2', color:'#3a6ea5', shape:'square' },
@@ -80,7 +91,7 @@
   const RULESETS = {
     classic: { label:'Clásico', hint:'Las reglas de siempre: movete y bloqueá con paredes hasta llegar al centro.' },
     fog:     { label:'Niebla de guerra', hint:'Sólo ves las paredes cercanas a quien juega en ese turno. Las lejanas siguen bloqueando aunque no se vean.', forcePlayers:null },
-    teams:   { label:'2v2 (equipos)', hint:'Se juega siempre con 4 en el mismo dispositivo. Equipo A: jugadores 1 y 3. Equipo B: jugadores 2 y 4. Gana el equipo del primero en llegar al centro.', forcePlayers:4, forceLocal:true },
+    teams:   { label:'2v2 (equipos)', hint:'4 fichas: Equipo A (jugadores 1 y 3) contra Equipo B (jugadores 2 y 4). Cada equipo comparte una sola reserva de paredes, empieza un equipo sorteado (el otro recibe una pared de compensación) y podés intercambiar lugar con tu aliado. Gana el primero que llega al centro, o el equipo cuyos dos aliados llegan. Se puede jugar entre 4 personas o «Yo + IA contra 2 IA».', forcePlayers:4, forceLocal:true },
     party:   { label:'Fiesta', hint:'De vez en cuando aparece un poder en el tablero: pared extra, turno extra o aturdir al rival mejor ubicado.' },
     maze:    { label:'Laberinto', hint:'El tablero arranca con paredes al azar ya colocadas (o con tu propio diseño del editor de niveles), garantizando que siempre haya camino.' },
     blitz:   { label:'Contrarreloj', hint:'Cada turno corre contra el reloj (10, 20, 30 o 45 s; por defecto 10 s + el tamaño del tablero), sea para mover o para poner una pared. Si se acaba, se juega solo el paso que más te acerca al centro (nunca una pared). Con 2 jugadores también hay reloj de ajedrez: 60 s de banco y +3 s por jugada; pierde quien llega a 0.' },
@@ -88,7 +99,12 @@
     hill:    { label:'Rey de la colina', hint:`No alcanza con pisar el centro: hay que terminar turnos SEGUIDOS dentro de la zona central (${HILL_TARGET_TEXT}). Si salís de la zona o te empujan, el conteo vuelve a 0. Cada jugador tiene ${HILL_PUSHES} empujones para sacar al rival, y no se puede cerrar la zona a menos de ${HILL_MIN_ACCESSES} accesos.` },
     hunter:  { label:'Cazador y fugitivo', hint:'El Jugador 1 es el fugitivo (contra la IA elegís tu rol) y gana si llega al centro. Los cazadores ganan atrapándolo —terminar su movimiento junto al fugitivo, sin pared de por medio— o si se acaba el límite de rondas. El fugitivo tiene 2 sprints y deja huellas durante 2 turnos; los cazadores comparten un pozo de paredes.' },
   };
-  const FOG_RADIUS = 2;
+  // Niebla de guerra: radio proporcional al tablero (antes era fijo en 2, casi todo un 5×5 y casi nada
+  // de un 11×11). `extra` permite ampliarlo (la IA en Experto ve un poco más lejos, como cualquier rival duro).
+  function fogRadius(extra){ return Math.max(2, Math.round(state.size/4)) + (extra||0); }
+  const FOG_ECHO_LIFE = 2;          // turnos que dura el eco de un rival tras salir del radio
+  const FOG_SEEN_OPACITY = 0.45;    // opacidad de las paredes ya vistas pero fuera del radio actual
+  function wallSlotKey(r,c,orientation){ return r+','+c+','+orientation; }
   // Contrarreloj: segundos por turno configurables (por defecto 10 + tamaño del tablero) y reloj de ajedrez.
   const BLITZ_SECONDS_CHOICES = [10, 20, 30, 45];
   function blitzDefaultSeconds(size){ return 10 + size; }
@@ -204,6 +220,9 @@
   const wallsEl = document.getElementById('wallsGroup');
   const piecesEl = document.getElementById('piecesGroup');
   const previewEl = document.getElementById('wallPreview');
+  const teamHudEl = document.getElementById('teamHud');
+  const fogOverlayEl = document.getElementById('fogOverlay');
+  const fogMaskHoleEl = document.getElementById('fogMaskHole');
   const winOverlay = document.getElementById('winOverlay');
   const winCard = document.getElementById('winCard');
   const winTitle = document.getElementById('winTitle');
@@ -301,6 +320,12 @@
   const pauseBtn = document.getElementById('pauseBtn');
   const resumeBtn = document.getElementById('resumeBtn');
   const pauseOverlay = document.getElementById('pauseOverlay');
+  const teamSetupFieldset = document.getElementById('teamSetupFieldset');
+  const teamGoalFieldset = document.getElementById('teamGoalFieldset');
+  const handoffOverlay = document.getElementById('handoffOverlay');
+  const handoffTitle = document.getElementById('handoffTitle');
+  const handoffMsg = document.getElementById('handoffMsg');
+  const handoffReadyBtn = document.getElementById('handoffReadyBtn');
   const moreOverlay = document.getElementById('moreOverlay');
   const moreLinkBtn = document.getElementById('moreLinkBtn');
   const closeMoreBtn = document.getElementById('closeMoreBtn');
@@ -352,7 +377,7 @@
   const modeDetail = document.getElementById('modeDetail');
   const modesConfirmBtn = document.getElementById('modesConfirmBtn');
   const modesCloseBtn = document.getElementById('modesCloseBtn');
-  const overlayEls = { campaign:campaignOverlay, modes:modesOverlay, win:winOverlay, confirm:confirmOverlay, settings:settingsOverlay, tutorial:tutorialOverlay, stats:statsOverlay, skins:skinsOverlay, achievements:achievementsOverlay, daily:dailyOverlay, pause:pauseOverlay, more:moreOverlay, shop:shopOverlay, namePrompt:namePromptOverlay };
+  const overlayEls = { campaign:campaignOverlay, modes:modesOverlay, win:winOverlay, confirm:confirmOverlay, settings:settingsOverlay, tutorial:tutorialOverlay, stats:statsOverlay, skins:skinsOverlay, achievements:achievementsOverlay, daily:dailyOverlay, pause:pauseOverlay, more:moreOverlay, shop:shopOverlay, namePrompt:namePromptOverlay, handoff:handoffOverlay };
 
   let state = null;
   let mode = 'move'; // 'move' | 'wall'
@@ -491,33 +516,124 @@
     return free.length ? free : zone;
   }
 
+  // ---------- Niebla de guerra: memoria de paredes vistas + eco de rivales fuera de radio ----------
+  function ensureFogMemory(){
+    if(!state.seen) state.seen = state.players.map(()=> new Set());
+    if(!state.echo) state.echo = state.players.map(()=> ({}));
+    if(!state.lastSeenPos) state.lastSeenPos = state.players.map(()=> ({}));
+  }
+  // Jugador cuya visión se dibuja: el humano activo, o (si juega la IA) el único humano de la partida.
+  function fogViewerIndex(){
+    if(!state || state.ruleset!=='fog') return null;
+    const ap = state.players[state.currentPlayerIndex];
+    if(!ap) return null;
+    if(ap.isCPU){ const h = state.players.findIndex(pl=> !pl.isCPU); return h>=0 ? h : state.currentPlayerIndex; }
+    return state.currentPlayerIndex;
+  }
+  // Recorre a todos los jugadores (no sólo a quien ve la pantalla ahora) para que cada uno acumule su
+  // propia memoria de paredes y, si un rival sale de su radio, le deje un eco en su última posición vista.
+  function updateAllFogMemory(){
+    if(!state || state.ruleset!=='fog') return;
+    ensureFogMemory();
+    const rad = fogRadius();
+    state.players.forEach((viewer, vIdx)=>{
+      const seenSet = state.seen[vIdx];
+      state.walls.forEach(w=>{
+        if(Math.max(Math.abs(w.r-viewer.r), Math.abs(w.c-viewer.c))<=rad) seenSet.add(wallSlotKey(w.r,w.c,w.orientation));
+      });
+      const echoMap = state.echo[vIdx], lastPos = state.lastSeenPos[vIdx];
+      state.players.forEach((p,i)=>{
+        if(i===vIdx) return;
+        const dist = Math.max(Math.abs(p.r-viewer.r), Math.abs(p.c-viewer.c));
+        if(dist<=rad){ lastPos[i] = { r:p.r, c:p.c }; delete echoMap[i]; }
+        else if(!echoMap[i] && lastPos[i]) echoMap[i] = { r:lastPos[i].r, c:lastPos[i].c, life:FOG_ECHO_LIFE };
+      });
+    });
+  }
+  // Se llama una vez por turno (desde advanceTurn): los ecos se apagan con el paso de los turnos, no de los renders.
+  function tickFogEchoes(){
+    if(!state || state.ruleset!=='fog' || !state.echo) return;
+    state.echo.forEach(echoMap=>{
+      Object.keys(echoMap).forEach(k=>{ if(--echoMap[k].life<=0) delete echoMap[k]; });
+    });
+  }
+  // Edges que un jugador puede ver ahora mismo o recuerda haber visto: base para el preview de colocación
+  // (para no delatar paredes ocultas) y para el conocimiento propio de la IA (sin trampa).
+  function visibleBlockedEdgesFor(viewerIdx){
+    ensureFogMemory();
+    const viewer = state.players[viewerIdx], rad = fogRadius(), edges = new Set();
+    state.walls.forEach(w=>{
+      const remembered = state.seen[viewerIdx].has(wallSlotKey(w.r,w.c,w.orientation));
+      if(remembered || Math.max(Math.abs(w.r-viewer.r), Math.abs(w.c-viewer.c))<=rad){
+        wallEdges(w.r,w.c,w.orientation).forEach(e=> edges.add(edgeKey(e[0],e[1],e[2],e[3])));
+      }
+    });
+    return edges;
+  }
+  function visibleOccupiedFor(viewerIdx){
+    ensureFogMemory();
+    const viewer = state.players[viewerIdx], rad = fogRadius();
+    const occ = Array.from({length: state.size-1}, ()=> Array(state.size-1).fill(null));
+    state.walls.forEach(w=>{
+      const remembered = state.seen[viewerIdx].has(wallSlotKey(w.r,w.c,w.orientation));
+      if(remembered || Math.max(Math.abs(w.r-viewer.r), Math.abs(w.c-viewer.c))<=rad) occ[w.r][w.c] = w.orientation;
+    });
+    return occ;
+  }
+  // Conocimiento propio de la IA en niebla: sólo paredes dentro de SU radio (o que ya vio antes),
+  // nunca el estado real completo. En Experto ve un anillo más.
+  function botKnownEdges(idx){
+    ensureFogMemory();
+    const bot = state.players[idx];
+    const rad = fogRadius(bot.difficulty==='expert' ? 1 : 0);
+    const known = new Set();
+    state.walls.forEach(w=>{
+      const remembered = state.seen[idx] && state.seen[idx].has(wallSlotKey(w.r,w.c,w.orientation));
+      if(remembered || Math.max(Math.abs(w.r-bot.r), Math.abs(w.c-bot.c))<=rad){
+        wallEdges(w.r,w.c,w.orientation).forEach(e=> known.add(edgeKey(e[0],e[1],e[2],e[3])));
+      }
+    });
+    return known;
+  }
+
   function wallEdges(r,c,orientation){
     if(orientation==='h'){
       return [[r,c,r+1,c],[r,c+1,r+1,c+1]];
     }
     return [[r,c,r,c+1],[r+1,c,r+1,c+1]];
   }
-  function canPlaceWallSlot(r,c,orientation){
+  function canPlaceWallSlot(r,c,orientation,occupiedGrid){
+    const occ = occupiedGrid || state.occupied;
     if(r<0||c<0||r>state.size-2||c>state.size-2) return false;
-    if(state.occupied[r][c]) return false;
+    if(occ[r][c]) return false;
     if(orientation==='h'){
-      if(c>0 && state.occupied[r][c-1]==='h') return false;
-      if(c<state.size-2 && state.occupied[r][c+1]==='h') return false;
+      if(c>0 && occ[r][c-1]==='h') return false;
+      if(c<state.size-2 && occ[r][c+1]==='h') return false;
     } else {
-      if(r>0 && state.occupied[r-1][c]==='v') return false;
-      if(r<state.size-2 && state.occupied[r+1][c]==='v') return false;
+      if(r>0 && occ[r-1][c]==='v') return false;
+      if(r<state.size-2 && occ[r+1][c]==='v') return false;
     }
     return true;
   }
-  function evaluateWallPlacement(r,c,orientation){
-    if(!canPlaceWallSlot(r,c,orientation)) return { valid:false };
+  // occupiedGrid/blockedBase opcionales: permiten evaluar contra un conocimiento parcial (niebla de guerra)
+  // en lugar del estado real completo. El commit siempre valida con el estado real (sin overrides).
+  function evaluateWallPlacement(r,c,orientation,occupiedGrid,blockedBase){
+    if(!canPlaceWallSlot(r,c,orientation,occupiedGrid)) return { valid:false };
     const edges = wallEdges(r,c,orientation);
-    const testSet = new Set(state.blockedEdges);
+    const testSet = new Set(blockedBase || state.blockedEdges);
     for(const e of edges) testSet.add(edgeKey(e[0],e[1],e[2],e[3]));
     for(const p of state.players){
       if(!hasPath(p.r,p.c,state.objective.r,state.objective.c,testSet,state.size)) return { valid:false };
     }
     return { valid:true, edges };
+  }
+  // Versión de evaluateWallPlacement que ve lo mismo que ve el jugador activo en niebla de guerra (sólo
+  // usada para pintar el preview): así no se delata una pared oculta pintando la ranura de inválida.
+  function evaluateWallForPreview(r,c,orientation){
+    if(state.ruleset!=='fog') return evaluateWallForMode(r,c,orientation);
+    const viewerIdx = fogViewerIndex();
+    if(viewerIdx==null) return evaluateWallForMode(r,c,orientation);
+    return evaluateWallPlacement(r,c,orientation, visibleOccupiedFor(viewerIdx), visibleBlockedEdgesFor(viewerIdx));
   }
   // ---------- Modo Espejo: valida y arma también la pared reflejada ----------
   function mirrorSlot(r,c){ return { r: state.size-2-r, c: state.size-2-c }; }
@@ -614,6 +730,12 @@
     return p.hillTurns >= hillTargetTurns();
   }
   function checkWinAfterMove(p){
+    if(state.teams){
+      if(p.r!==state.objective.r || p.c!==state.objective.c) return false;
+      p.arrived = true;
+      if(state.teamGoal!=='both') return true;
+      return teamMembers(teamOf(p.id)).every(i=> state.players[i].arrived);   // deben llegar los dos aliados
+    }
     if(state.ruleset==='hill') return updateHillProgress(p);
     if(state.ruleset==='hunter'){
       return p.id===state.fugitiveIdx && p.r===state.objective.r && p.c===state.objective.c;
@@ -1101,11 +1223,13 @@
       const nr=p.r+dr, nc=p.c+dc;
       if(nr<0||nc<0||nr>=state.size||nc>=state.size) continue;
       if(isBlocked(p.r,p.c,nr,nc,state.blockedEdges)) continue;
-      const occupantIdx = state.players.findIndex((pl,i)=> i!==playerIndex && pl.r===nr && pl.c===nc);
+      const occupantIdx = state.players.findIndex((pl,i)=> i!==playerIndex && !pl.arrived && pl.r===nr && pl.c===nc);
       if(occupantIdx===-1){
         moves.push({ r:nr, c:nc });
         continue;
       }
+      // 2v2: con el aliado a un paso (y sin pared en medio) se ofrece intercambiar casillas; gasta el turno.
+      if(state.teams && occupantIdx===allyIdxOf(playerIndex)) moves.push({ r:nr, c:nc, swap:true });
       const jr=nr+dr, jc=nc+dc;
       // Rey de la colina: empujar al rival adyacente. La jugada apunta a la casilla del rival
       // (donde va a quedar el atacante) y `push` es la casilla a la que se desliza el rival.
@@ -1113,12 +1237,12 @@
       if(state.ruleset==='hill' && (p.pushesLeft||0)>0 && !(state.lastPush && state.lastPush[playerIndex]===occupantIdx)){
         const behindFree = jr>=0 && jc>=0 && jr<state.size && jc<state.size &&
           !isBlocked(nr,nc,jr,jc,state.blockedEdges) &&
-          !state.players.some(pl=> pl.r===jr && pl.c===jc);
+          !state.players.some(pl=> !pl.arrived && pl.r===jr && pl.c===jc);
         if(behindFree) moves.push({ r:nr, c:nc, push:{ r:jr, c:jc } });
       }
       const straightOk = jr>=0 && jc>=0 && jr<state.size && jc<state.size &&
         !isBlocked(nr,nc,jr,jc,state.blockedEdges) &&
-        !state.players.some((pl,i)=> i!==playerIndex && pl.r===jr && pl.c===jc);
+        !state.players.some((pl,i)=> i!==playerIndex && !pl.arrived && pl.r===jr && pl.c===jc);
       if(straightOk){
         moves.push({ r:jr, c:jc });
       } else {
@@ -1127,7 +1251,7 @@
           const sr=nr+pdr, sc=nc+pdc;
           if(sr<0||sc<0||sr>=state.size||sc>=state.size) continue;
           if(isBlocked(nr,nc,sr,sc,state.blockedEdges)) continue;
-          if(state.players.some((pl,i)=> i!==playerIndex && pl.r===sr && pl.c===sc)) continue;
+          if(state.players.some((pl,i)=> i!==playerIndex && !pl.arrived && pl.r===sr && pl.c===sc)) continue;
           moves.push({ r:sr, c:sc });
         }
       }
@@ -1151,15 +1275,24 @@
     for(let i=0;i<n;i++){
       next = (next+1) % n;
       const cand = state.players[next];
+      if(cand.arrived) continue;                 // 2v2 «llegan los dos»: quien ya llegó no vuelve a jugar
       if(cand.stunned){ cand.stunned = false; continue; }
       if(n>1 && cand.wallsLeft<=0 && computeValidMoves(next).length===0) continue;
       break;
     }
+    const prevIndex = state.currentPlayerIndex;
     state.currentPlayerIndex = next;
     state.sprintArmed = false;
     state.validMoves = computeValidMoves(next);
     const cpNext = state.players[next];
     mode = (!state.validMoves.length && cpNext.wallsLeft>0 && !cpNext.isCPU) ? 'wall' : 'move';
+    tickFogEchoes();
+    // Niebla de guerra con 2+ humanos en el mismo dispositivo: al pasar a otro humano, lo que reveló quien
+    // jugó antes anularía la niebla si se ve directo. Cortina "pasá el celular" hasta que el próximo confirme.
+    if(state.ruleset==='fog' && !state.winner && next!==prevIndex && !cpNext.isCPU
+      && state.players.filter(pl=> !pl.isCPU).length>=2){
+      queueHandoff(cpNext);
+    }
   }
 
   // ---------- overlays genéricos ----------
@@ -1186,6 +1319,14 @@
       updateHunterBadge();
     }
   }
+  // Cortina de traspaso (niebla de guerra, 2+ humanos): pausa el reloj y tapa el tablero hasta que el
+  // siguiente jugador confirme que ya tiene el celular en mano.
+  function queueHandoff(player){
+    handoffTitle.textContent = `Pasá el celular a ${player.name}`;
+    handoffMsg.textContent = 'Cuando lo tenga en mano, tocá "Listo" para ver su turno.';
+    openOverlay('handoff');
+  }
+  handoffReadyBtn.addEventListener('click', ()=> closeOverlay('handoff'));
   function closeTopOverlay(){
     if(!overlayStack.length) return false;
     closeOverlay(overlayStack[overlayStack.length-1]);
@@ -2090,7 +2231,7 @@
   function gameReward(p){
     const r = { coins:0, note:'', stars:0, chest:null };
     if(!state.isCpuGame){ r.note = 'Las partidas entre personas no dan monedas. Ganale a la IA o resolvé el desafío diario para juntar.'; return r; }
-    if(p.isCPU) return r;
+    if(state.players[creditedSlot(p)].isCPU) return r;
     const diff = (state.players[1] && state.players[1].difficulty) || 'easy';
     const base = (DIFFICULTY[diff] || DIFFICULTY.easy).coins;
     if(state.moveCount < state.size + 1){ r.note = 'Fue una partida muy corta: para sumar monedas tiene que durar un poco más.'; return r; }
@@ -2273,7 +2414,7 @@
       ? 'Arrastrá sobre el tablero para ubicar la pared y soltá para confirmarla.'
       : (state && state.sprintArmed
         ? 'Sprint: tocá una casilla a dos pasos en línea recta.'
-        : 'Tocá una casilla resaltada para moverte.' + (canPush ? ' La flecha empuja al rival.' : '')));
+        : 'Tocá una casilla resaltada para moverte.' + (canPush ? ' La flecha empuja al rival.' : '') + ((state && state.validMoves.some(m=> m.swap)) ? ' El ⇄ intercambia lugar con tu aliado (gasta el turno).' : '')));
     updateSprintBtn();
   }
   // Botón de sprint del HUD (sólo existe en Cazador y fugitivo; sólo lo usa el fugitivo humano en su turno)
@@ -2308,23 +2449,48 @@
     botToken++;
     if(botTimer){ clearTimeout(botTimer); botTimer=null; }
   }
-  function otherPlayerClosestToCenter(excludeIdx){
+  function otherPlayerClosestToCenter(excludeIdx,edgesOverride){
+    const edges = edgesOverride || state.blockedEdges;
+    // 2v2: los únicos rivales son los del otro equipo. Con «primero que llega» amenaza el más cercano al centro; con
+    // «llegan los dos» el equipo rival termina cuando llega su miembro más lejano, así que ése es el que hay que frenar.
+    if(state.teams){
+      const myTeam = teamOf(excludeIdx);
+      const rivals = state.players.map((p,i)=> i).filter(i=> teamOf(i)!==myTeam && !state.players[i].arrived);
+      if(!rivals.length) return null;
+      const dist = i=> distanceToCenter(state.players[i].r, state.players[i].c, edges);
+      return rivals.reduce((best,i)=> {
+        if(best==null) return i;
+        return (state.teamGoal==='both' ? dist(i)>dist(best) : dist(i)<dist(best)) ? i : best;
+      }, null);
+    }
     let best=null, bestDist=Infinity;
     state.players.forEach((p,i)=>{
       if(i===excludeIdx) return;
-      const d = distanceToCenter(p.r,p.c,state.blockedEdges);
+      const d = distanceToCenter(p.r,p.c,edges);
       if(d<bestDist){ bestDist=d; best=i; }
     });
     return best;
   }
-  function findBestBlockingWall(opponentIdx,currentOppDist,distFn){
+  // edgesOverride: base de paredes conocidas para ESTIMAR la ganancia de una pared (niebla de guerra: el
+  // conocimiento propio de la IA). La legalidad real de colocarla siempre se valida con el estado real.
+  function findBestBlockingWall(opponentIdx,currentOppDist,distFn,edgesOverride,botIdx){
     const distOf = distFn || distanceToCenter;
+    const baseEdges = edgesOverride || state.blockedEdges;
+    // IA aliada (53): Δally = cuánto le alarga la pared el camino a su compañero. Se descuenta doble de la ganancia
+    // contra el rival, y la pared que no sale a cuenta se descarta.
+    const me = botIdx!=null ? botIdx : state.currentPlayerIndex;
+    const ally = (state.teams && state.players[allyIdxOf(me)] && !state.players[allyIdxOf(me)].arrived) ? state.players[allyIdxOf(me)] : null;
+    const allyBase = ally ? distanceToCenter(ally.r,ally.c,baseEdges) : 0;
     const opp=state.players[opponentIdx], radius=3, maxSlot=state.size-2, candidates=[];
     for(let r=Math.max(0,opp.r-radius);r<=Math.min(maxSlot,opp.r+radius);r++) for(let c=Math.max(0,opp.c-radius);c<=Math.min(maxSlot,opp.c+radius);c++) for(const orientation of ['h','v']){
       const ev=evaluateWallForMode(r,c,orientation); if(!ev.valid) continue;
-      const test=new Set(state.blockedEdges); ev.edges.forEach(e=>test.add(edgeKey(e[0],e[1],e[2],e[3])));
+      const test=new Set(baseEdges); ev.edges.forEach(e=>test.add(edgeKey(e[0],e[1],e[2],e[3])));
       if(ev.mirrorEdges) ev.mirrorEdges.forEach(e=>test.add(edgeKey(e[0],e[1],e[2],e[3])));
-      const d=distOf(opp.r,opp.c,test); if(d>currentOppDist) candidates.push({r,c,orientation,gain:d-currentOppDist,newOppDist:d});
+      const d=distOf(opp.r,opp.c,test); if(d<=currentOppDist) continue;
+      const deltaAlly = ally ? Math.max(0, distanceToCenter(ally.r,ally.c,test) - allyBase) : 0;
+      const net = (d-currentOppDist) - deltaAlly*2;
+      if(net<=0) continue;
+      candidates.push({r,c,orientation,gain:net,newOppDist:d,deltaAlly});
     }
     if(!candidates.length)return null;
     candidates.sort((a,b)=>b.gain-a.gain||a.newOppDist-b.newOppDist);
@@ -2437,13 +2603,16 @@
     }
     if(state.ruleset==='hill') return botPlanHill(idx, profile);
     if(state.ruleset==='hunter') return idx===state.fugitiveIdx ? botPlanFugitive(idx, profile) : botPlanHunter(idx, profile);
-    const oppIdx = otherPlayerClosestToCenter(idx);
+    // En niebla de guerra la IA razona sólo con lo que su propio radio (o su memoria) le muestra, nunca con
+    // el estado real completo: así no tiene ventaja sobre un humano jugando la misma partida.
+    const knownEdges = state.ruleset==='fog' ? botKnownEdges(idx) : state.blockedEdges;
+    const oppIdx = otherPlayerClosestToCenter(idx, knownEdges);
     if(bot.wallsLeft>0&&oppIdx!=null){
-      const myDist=distanceToCenter(bot.r,bot.c,state.blockedEdges),oppDist=distanceToCenter(state.players[oppIdx].r,state.players[oppIdx].c,state.blockedEdges);
-      if(oppDist<=myDist+1&&Math.random()<profile.wallChance){ const w=findBestBlockingWall(oppIdx,oppDist); if(w)return {type:'wall',r:w.r,c:w.c,orientation:w.orientation}; }
+      const myDist=state.teams ? teamEta(teamOf(idx)) : distanceToCenter(bot.r,bot.c,knownEdges),oppDist=distanceToCenter(state.players[oppIdx].r,state.players[oppIdx].c,knownEdges);
+      if(oppDist<=myDist+1&&Math.random()<profile.wallChance){ const w=findBestBlockingWall(oppIdx,oppDist,null,knownEdges,idx); if(w)return {type:'wall',r:w.r,c:w.c,orientation:w.orientation}; }
     }
     const moves=state.validMoves; if(!moves.length)return {type:'move',r:bot.r,c:bot.c};
-    const scored=moves.map(m=>({m,score:scoreBotMove(idx,m,profile.personality)})).sort((a,b)=>b.score-a.score);
+    const scored=moves.map(m=>({m,score:scoreBotMove(idx,m,profile.personality,knownEdges)})).sort((a,b)=>b.score-a.score);
     const choice=Math.random()<profile.randomness?scored[Math.floor(Math.random()*Math.min(3,scored.length))]:scored[0];
     return {type:'move',r:choice.m.r,c:choice.m.c};
   }
@@ -2482,6 +2651,28 @@
     if(state.ruleset!=='teams') return null;
     return (playerId===0 || playerId===2) ? 'A' : 'B';
   }
+  function teamMembers(team){ return team==='A' ? [0,2] : [1,3]; }
+  // Estadísticas y premios: si el equipo ganador tiene una persona, la victoria se le acredita a ella aunque haya
+  // llegado su aliado IA («Yo + IA contra 2 IA»). Sin equipos, o sin IA, es el propio ganador.
+  function creditedSlot(p){
+    if(!state.teams || !state.isCpuGame) return p.id;
+    const human = teamMembers(teamOf(p.id)).find(i=> !state.players[i].isCPU);
+    return human!=null ? human : p.id;
+  }
+  function allyIdxOf(idx){ return (idx+2) % 4; }                // asientos enfrentados: 0-2 y 1-3
+  // Reserva compartida (49): cada jugador del equipo ve el saldo del equipo en su wallsLeft.
+  function syncTeamWalls(){
+    if(!state.teams) return;
+    ['A','B'].forEach(k=> state.teams[k].members.forEach(i=>{ state.players[i].wallsLeft = state.teams[k].wallsLeft; }));
+  }
+  // Pasos que le faltan al equipo para cumplir su objetivo: el que va más adelantado ("primero que llega")
+  // o el más rezagado ("llegan los dos"). Los que ya llegaron no cuentan.
+  function teamEta(team){
+    const ds = teamMembers(team).map(i=> state.players[i]).filter(pl=> !pl.arrived)
+      .map(pl=> distanceToCenter(pl.r,pl.c,state.blockedEdges));
+    if(!ds.length) return 0;
+    return state.teamGoal==='both' ? Math.max(...ds) : Math.min(...ds);
+  }
   function finishGame(p, resultTag, reason){
     state.winner = p;
     state.resultTag = resultTag || null;
@@ -2501,7 +2692,7 @@
       reward = dailyReward(res, state.moveCount, state.dailyPar);
     } else {
       fresh = recordGameResult({
-        winnerSlot: p.id,
+        winnerSlot: creditedSlot(p),
         isCpuGame: !!state.isCpuGame,
         cpuDifficulty: (state.isCpuGame && state.players[1]) ? state.players[1].difficulty : null,
         ruleset: state.ruleset,
@@ -2518,7 +2709,7 @@
     }
     reward.fresh = fresh;
     state.lastReward = reward;
-    if(state.isCpuGame && !state.isDaily) cpuReact(p.isCPU ? 'laugh' : 'faceSad', true);
+    if(state.isCpuGame && !state.isDaily) cpuReact(state.players[creditedSlot(p)].isCPU ? 'laugh' : 'faceSad', true);
     clearTurnTimer();
     playWinSound();
     vibrate([0,40,60,40,140]);
@@ -2565,6 +2756,14 @@
     // ¿la casilla elegida es un empujón? (la jugada guarda a dónde se desliza el rival)
     const chosen = state.validMoves.find(m=> m.r===r && m.c===c);
     const pushTo = (state.ruleset==='hill' && chosen && chosen.push) ? chosen.push : null;
+    // 2v2: intercambio con el aliado. Ambos cambian de casilla (deslizan como en el empujón) y se gasta el turno.
+    if(chosen && chosen.swap){
+      const ally = state.players.find(pl=> pl!==p && !pl.arrived && pl.r===r && pl.c===c);
+      if(ally){
+        state.anim = { pusher: idx, pushed: state.players.indexOf(ally), pusherFrom:{ r:p.r, c:p.c }, pushedFrom:{ r:ally.r, c:ally.c } };
+        ally.r = p.r; ally.c = p.c;
+      }
+    }
     if(pushTo){
       const rival = state.players.find(pl=> pl!==p && pl.r===r && pl.c===c);
       // datos para la animación: cada ficha desliza desde donde estaba (render() los consume una sola vez)
@@ -2594,6 +2793,10 @@
       finishGame(p);
       return;
     }
+    if(state.teams && p.arrived){
+      const ally = state.players[allyIdxOf(idx)];
+      showToast(`✅ ${escapeHtml(p.name)} llegó al centro. Falta ${escapeHtml(ally.name)}.`);
+    }
     settleClock(idx);                              // reloj de ajedrez: descuenta lo gastado y suma el incremento
     // Captura por adyacencia: sólo cuenta la jugada de un cazador
     if(state.ruleset==='hunter' && idx!==state.fugitiveIdx && isCaptureAdjacent(r,c)){
@@ -2619,9 +2822,19 @@
   }
 
   function commitWall(r,c,orientation){
-    if(state.winner) return;
+    if(state.winner) return false;
     const evalRes = evaluateWallForMode(r,c,orientation);
-    if(!evalRes.valid) return;
+    if(!evalRes.valid){
+      // En niebla de guerra el preview pudo verse válido con lo poco que el jugador ve; si el estado real
+      // lo rechaza (pared oculta u otra razón), no delatamos el motivo: mensaje neutro y esa ranura queda vista.
+      if(state.ruleset==='fog'){
+        const viewerIdx = fogViewerIndex();
+        if(viewerIdx!=null){ ensureFogMemory(); state.seen[viewerIdx].add(wallSlotKey(r,c,orientation)); }
+        hintLine.textContent = 'No se pudo colocar la pared ahí.';
+        if(activeClockKind()!=='turn') render();   // evita reiniciar sin querer un reloj de turno a mitad de jugada
+      }
+      return false;
+    }
     const cp = state.players[state.currentPlayerIndex];
     if(!autoPlayInFlight && !cp.isCPU) state.timeoutStreak = 0;   // una persona jugó: se corta la racha de vencimientos
     const cpuOpp = (state.isCpuGame && !cp.isCPU && state.players[1]) ? state.players[1] : null;
@@ -2643,6 +2856,9 @@
     if(state.hunterPool!=null && state.currentPlayerIndex!==state.fugitiveIdx){
       state.hunterPool -= 1;      // los cazadores gastan del pozo común
       syncHunterPool();
+    } else if(state.teams){
+      state.teams[teamOf(cp.id)].wallsLeft -= 1;   // reserva compartida: la pared la paga el equipo
+      syncTeamWalls();
     } else {
       cp.wallsLeft -= 1;
     }
@@ -2655,13 +2871,14 @@
       state.winner = cp;
       render();
       finishGame(cp);
-      return;
+      return true;
     }
     settleClock(state.currentPlayerIndex);        // reloj de ajedrez: descuenta lo gastado y suma el incremento
     advanceTurn();
     maybeSpawnPower();
     checkHunterTimeout();
     render();
+    return true;
   }
 
   // ---------- Contrarreloj: reloj por turno y reloj de ajedrez ----------
@@ -2759,7 +2976,7 @@
     if(!state || state.winner) return;
     const moves = state.validMoves;
     if(!moves.length){ advanceTurn(); render(); return; }
-    const plain = moves.filter(m=> !m.push && !m.sprint);   // el reloj no gasta empujones ni sprints por el jugador
+    const plain = moves.filter(m=> !m.push && !m.sprint && !m.swap);   // el reloj no gasta empujones ni sprints por el jugador
     const scored = (plain.length ? plain : moves).map(m=> ({ m, d: distanceToCenter(m.r, m.c, state.blockedEdges) }));
     scored.sort((a,b)=> a.d-b.d);
     performMove(scored[0].m.r, scored[0].m.c);
@@ -2927,6 +3144,10 @@
           const u = cs*0.2;
           const pts = [[-1.3,-.36],[.2,-.36],[.2,-.95],[1.5,0],[.2,.95],[.2,.36],[-1.3,.36]].map(([x,y])=> `${(x*u).toFixed(1)},${(y*u).toFixed(1)}`).join(' ');
           pushArrowsHTML += `<g transform="translate(${cx} ${cy}) rotate(${ang.toFixed(1)})" class="move-dot push-arrow"><polygon points="${pts}" fill="${activePlayer.color}" stroke="rgba(255,255,255,.92)" stroke-width="2" stroke-linejoin="round"/></g>`;
+        } else if(m.swap){
+          // ⇄ sobre la ficha del aliado (va con las flechas: se dibuja por encima de las fichas)
+          pushArrowsHTML += `<g class="move-dot push-arrow" pointer-events="none"><circle cx="${cx}" cy="${cy}" r="${cs*0.3}" fill="${activePlayer.color}" opacity="0.92" stroke="rgba(255,255,255,.92)" stroke-width="2"/>`
+            + `<text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="central" font-size="${cs*0.42}" font-weight="700" fill="#fff">⇄</text></g>`;
         } else if(m.sprint){
           const isz = cs*0.46;
           movesHTML += `<circle cx="${cx}" cy="${cy}" r="${cs*0.3}" fill="${activePlayer.color}" opacity="0.22" class="move-dot"/>`
@@ -2941,8 +3162,24 @@
   }
 
   // ---------- render ----------
+  // Niebla suave (tarea 47): una máscara con gradiente radial que sigue a la ficha del visor, en vez de
+  // un corte brusco por casilla. Sólo se actualizan cx/cy/r; la transición de 150ms la hace el CSS.
+  function updateFogOverlay(cs, viewerPlayer, rad){
+    if(!fogOverlayEl || !fogMaskHoleEl) return;
+    if(!viewerPlayer){ fogOverlayEl.setAttribute('opacity','0'); return; }
+    const cx=(viewerPlayer.c+0.5)*cs, cy=(viewerPlayer.r+0.5)*cs, r=(rad+0.55)*cs;
+    fogMaskHoleEl.setAttribute('cx', cx);
+    fogMaskHoleEl.setAttribute('cy', cy);
+    fogMaskHoleEl.setAttribute('r', r);
+    fogOverlayEl.setAttribute('opacity','1');
+  }
+
   function render(justMovedIndex){
     const cs = cellSize();
+    updateAllFogMemory();
+    const fogViewer = fogViewerIndex();
+    const fogViewerPlayer = fogViewer!=null ? state.players[fogViewer] : null;
+    const fogRad = fogViewerPlayer ? fogRadius() : null;
 
     let gridHTML = `<rect x="0" y="0" width="${BOARD_PX}" height="${BOARD_PX}" fill="var(--board)"/>`;
     for(let r=0;r<state.size;r++){
@@ -2978,16 +3215,20 @@
     movesEl.innerHTML = marks.moves;
 
     let wallsHTML = '';
-    const fogCenter = (state.ruleset==='fog' && activePlayer) ? (activePlayer.isCPU ? (state.players.find(pl=> !pl.isCPU) || activePlayer) : activePlayer) : null;
     for(const w of state.walls){
-      if(fogCenter){
-        const dist = Math.max(Math.abs(w.r-fogCenter.r), Math.abs(w.c-fogCenter.c));
-        if(dist > FOG_RADIUS) continue;
+      let wallOpacity = 1;
+      if(fogViewerPlayer){
+        const dist = Math.max(Math.abs(w.r-fogViewerPlayer.r), Math.abs(w.c-fogViewerPlayer.c));
+        if(dist > fogRad){
+          const remembered = state.seen && state.seen[fogViewer] && state.seen[fogViewer].has(wallSlotKey(w.r,w.c,w.orientation));
+          if(!remembered) continue;   // nunca vista: no se dibuja
+          wallOpacity = FOG_SEEN_OPACITY;   // vista alguna vez, ahora fuera de radio: se dibuja tenue
+        }
       }
       const rect = wallRect(w.r,w.c,w.orientation,cs);
       const rx = rect.h>rect.w ? rect.w*0.4 : rect.h*0.4;
       const look = w.env ? 'fill="url(#stoneTex)" stroke="#2b2620" stroke-width="1.6"' : `fill="${w.color}" stroke="rgba(0,0,0,0.3)" stroke-width="1"`;
-      wallsHTML += `<rect x="${rect.x}" y="${rect.y}" width="${rect.w}" height="${rect.h}" rx="${rx}" ${look}${w.env ? ' class="map-wall"' : ''}/>`;
+      wallsHTML += `<rect x="${rect.x}" y="${rect.y}" width="${rect.w}" height="${rect.h}" rx="${rx}" ${look} opacity="${wallOpacity}"${w.env ? ' class="map-wall"' : ''}/>`;
     }
     if(state.ruleset==='party' && state.powerUp){
       const pc=(state.powerUp.c+0.5)*cs, pr=(state.powerUp.r+0.5)*cs;
@@ -3009,9 +3250,32 @@
     }
     const anim = state.anim; state.anim = null;   // la animación del empujón se reproduce una sola vez
     state.players.forEach((p,i)=>{
+      if(fogViewerPlayer && i!==fogViewer){
+        const dist = Math.max(Math.abs(p.r-fogViewerPlayer.r), Math.abs(p.c-fogViewerPlayer.c));
+        if(dist > fogRad){
+          const echo = state.echo && state.echo[fogViewer] && state.echo[fogViewer][i];
+          if(echo){
+            const ex=(echo.c+0.5)*cs, ey=(echo.r+0.5)*cs, eSize=cs*0.5;
+            const eOp = echo.life>=FOG_ECHO_LIFE ? 0.4 : 0.2;
+            piecesHTML += `<g opacity="${eOp}" pointer-events="none" class="fog-echo">${pieceMarkup(p.shape, ex, ey, eSize, p.color, '')}</g>`;
+          }
+          return;   // fuera del radio de niebla: la ficha real no se dibuja
+        }
+      }
       const cx=(p.c+0.5)*cs, cy=(p.r+0.5)*cs;
       const size = cs*0.58;
       let g = '';
+      const tm = teamOf(p.id);
+      if(p.arrived){
+        // llegó al centro y espera a su aliado: queda en miniatura en una esquina de la casilla central
+        const k = state.players.filter((q,j)=> q.arrived && j<i).length;
+        const off = (k===0 ? -1 : 1) * cs*0.2, mx = cx+off, my = cy+off, ms = size*0.55;
+        if(tm) g += teamRingMarkup(tm, mx, my, ms);
+        g += pieceMarkup(p.shape, mx, my, ms, p.color, '');
+        piecesHTML += g;
+        return;
+      }
+      if(tm) g += teamRingMarkup(tm, cx, cy, size);
       if(i===state.currentPlayerIndex && !state.winner){
         g += `<circle cx="${cx}" cy="${cy}" r="${size*0.72}" fill="none" stroke="${p.color}" stroke-width="2.5" class="turn-ring"/>`;
       }
@@ -3032,6 +3296,8 @@
       piecesHTML += g;
     });
     piecesEl.innerHTML = piecesHTML + pushArrowsHTML;
+    updateFogOverlay(cs, fogViewerPlayer, fogRad);
+
 
     updateHeader();
     updateSidePanel();
@@ -3068,7 +3334,7 @@
         return;
       }
       const team = teamOf(state.winner.id);
-      turnIndicator.textContent = team ? `¡Equipo ${team} ganó! (${state.winner.name})` : `¡${state.winner.name} ganó!`;
+      turnIndicator.textContent = team ? (state.teamGoal==='both' ? `¡Equipo ${team} ganó! Llegaron los dos` : `¡Equipo ${team} ganó! (${state.winner.name})`) : `¡${state.winner.name} ganó!`;
       turnIndicator.style.color = state.winner.color;
       return;
     }
@@ -3083,15 +3349,40 @@
     turnIndicator.style.color = cp.color;
   }
 
+  // Anillo de equipo (48): 3 px, color del equipo (A continuo, B punteado) con un halo fino para que se lea sobre cualquier tablero.
+  function teamRingMarkup(team, cx, cy, size){
+    const ts = TEAM_STYLE[team], r = (size*0.6).toFixed(1);
+    return `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${ts.halo}" stroke-width="${TEAM_RING_PX+2.5}" pointer-events="none"/>`
+      + `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${ts.color}" stroke-width="${TEAM_RING_PX}"${ts.dash ? ` stroke-dasharray="${ts.dash}"` : ''} pointer-events="none" class="team-ring"/>`;
+  }
+
+  // Marcador de equipos: rótulo, progreso (0/2, 1/2 si deben llegar los dos) y reserva común de paredes.
+  function updateTeamHud(){
+    if(!teamHudEl) return;
+    teamHudEl.classList.toggle('hidden', !state.teams);
+    if(!state.teams){ teamHudEl.innerHTML = ''; return; }
+    const turnTeam = state.winner ? teamOf(state.winner.id) : teamOf(state.currentPlayerIndex);
+    teamHudEl.innerHTML = ['A','B'].map(k=>{
+      const t = state.teams[k];
+      const arrived = t.members.filter(i=> state.players[i].arrived).length;
+      const prog = state.teamGoal==='both'
+        ? `<span class="team-prog" title="Aliados que ya llegaron al centro">🏁 ${arrived}/2</span>`
+        : '<span class="team-prog" title="Gana el primero que llegue">🏁 1º</span>';
+      return `<div class="team-chip team-${k}${turnTeam===k ? ' active' : ''}"><i class="team-dot"></i><b>Equipo ${k}</b>${prog}<span class="team-walls" title="Reserva de paredes compartida">🧱 ${t.wallsLeft}</span></div>`;
+    }).join('');
+  }
+
   function updateSidePanel(){
     const now = Date.now();
+    updateTeamHud();
     playersListEl.innerHTML = state.players.map((p,i)=>{
       const active = (i===state.currentPlayerIndex && !state.winner);
       const bg = active ? hexToRgba(p.color,0.12) : 'transparent';
       const diffN = p.difficulty==='expert' ? 4 : (p.difficulty==='hard' ? 3 : (p.difficulty==='normal' ? 2 : 1));
       const cpuTag = p.isCPU ? `<span class="cpu-tag">IA <span class="stars-row">${starsHTML(diffN,diffN===4?4:3,10)}</span></span>` : '';
       const team = teamOf(p.id);
-      const teamTag = team ? `<span class="cpu-tag">Equipo ${team}</span>` : '';
+      const teamTag = team ? `<span class="cpu-tag team-tag team-${team}"><i class="team-dot"></i>Equipo ${team}</span>` : '';
+      const arrivedTag = p.arrived ? '<span class="cpu-tag">🏁 llegó</span>' : '';
       const stunTag = p.stunned ? `<span class="cpu-tag"><img src="${emoteIconSrc('swirl')}" alt="">aturdido</span>` : '';
       const hillTag = (state.ruleset==='hill')
         ? `<span class="cpu-tag">⛰️ ${p.hillTurns||0}/${hillTargetTurns()}</span><span class="cpu-tag" title="Empujones que le quedan"><img src="${emoteIconSrc('anger')}" alt="Empujones">${p.pushesLeft||0}</span>`
@@ -3100,7 +3391,7 @@
       const hunterTag = (state.ruleset==='hunter')
         ? (isFug ? `<span class="cpu-tag">🏃 fugitivo</span><span class="cpu-tag" title="Sprints que le quedan"><img src="${emoteIconSrc('exclamations')}" alt="Sprints">${p.sprints||0}</span>` : '<span class="cpu-tag">🏹 cazador</span>')
         : '';
-      const sharedWalls = state.ruleset==='hunter' && state.hunterPool!=null && !isFug && hunterIndexes().length>1;
+      const sharedWalls = !!state.teams || (state.ruleset==='hunter' && state.hunterPool!=null && !isFug && hunterIndexes().length>1);
       const chess = state.clockMode==='chess' && state.clock;
       const clockLine = chess
         ? `<div class="clock-line${state.clock[i]<=CLOCK_LOW_SECONDS?' low':''}" data-pid="${i}" role="progressbar" aria-label="Reloj de ${escapeHtml(p.name)}" aria-valuemin="0" aria-valuemax="${CLOCK_BANK_SECONDS}" aria-valuenow="${Math.ceil(Math.max(0,state.clock[i]))}"><span class="clock-track"><span class="clock-fill" style="width:${Math.min(100, Math.max(0,state.clock[i])/CLOCK_BANK_SECONDS*100).toFixed(1)}%"></span></span><span class="clock-time">${fmtClock(state.clock[i])}</span></div>`
@@ -3109,7 +3400,7 @@
         `<button type="button" class="emote-btn ${(emoteCooldown[i]||0)>now?'cooldown':''}" data-pid="${i}" aria-label="Emotes de ${escapeHtml(p.name)}"><img src="${emoteIconSrc('faceHappy')}" alt=""></button>`;
       return `<li class="player-row ${active?'active':''}${chess?' has-clock':''}" style="--pc:${p.color}; --pc-bg:${bg}">
         <span class="row-icon">${smallShapeSVG(p.shape,p.color,22)}</span>
-        <span class="player-name">${escapeHtml(p.name)}${cpuTag}${teamTag}${stunTag}${hillTag}${hunterTag}</span>
+        <span class="player-name">${escapeHtml(p.name)}${cpuTag}${teamTag}${arrivedTag}${stunTag}${hillTag}${hunterTag}</span>
         <span class="wall-count">${p.wallsLeft} <span class="wall-label">${sharedWalls ? 'del equipo' : 'paredes'}</span></span>
         ${emoteBtn}
         ${clockLine}
@@ -3151,7 +3442,7 @@
           ? `¡Ganaste la etapa ${state.campaignLevel}! +${state.campaignXPReward||0} XP. ${campaignProgressText()}`
           : `${p.name} ganó esta etapa. Podés intentarlo de nuevo cuando quieras.`;
       } else {
-        winMsg.textContent = team ? `${p.name} llegó primero al centro para su equipo.` : 'Podés jugar otra ronda con la misma configuración o cambiar los ajustes.';
+        winMsg.textContent = team ? (state.teamGoal==='both' ? `${state.players[teamMembers(team)[0]].name} y ${state.players[teamMembers(team)[1]].name} llegaron al centro.` : `${p.name} llegó primero al centro para su equipo.`) : 'Podés jugar otra ronda con la misma configuración o cambiar los ajustes.';
       }
     }
     // estrellas (desafío diario: según el par)
@@ -3181,7 +3472,7 @@
     renderWinGoal();
     renderWinMapInfo();
     openOverlay('win');
-    if(!p.isCPU) starRain();
+    if(!state.players[creditedSlot(p)].isCPU) starRain();
   }
   function renderWinMapInfo(){
     const mi = state && state.mazeInfo;
@@ -3232,6 +3523,11 @@
     if(!turnTimeSeconds && isBlitzPlain) turnTimeSeconds = blitzDefaultSeconds(size);
     const clockMode = (isBlitzPlain && options.clockMode==='chess' && playersCount===2) ? 'chess' : null;
 
+    // 2v2 (50, 51): objetivo del equipo y sorteo de quién abre. Los niveles del editor traen sus propias reglas de paredes.
+    const isTeams = ruleset==='teams' && playersCount===4;
+    const teamGoal = (isTeams && options.teamGoal==='both') ? 'both' : 'first';
+    const startTeam = isTeams ? ((options.startTeam==='A' || options.startTeam==='B') ? options.startTeam : (Math.random()<0.5 ? 'A' : 'B')) : 'A';
+
     const players = order.map((slotKey,i)=>{
       const skin = pieceSkins[i] || PALETTE[i];
       const isCPU = customPlayers ? !!customPlayers[i].isCPU : (isCpu && i===1);
@@ -3241,7 +3537,7 @@
       }
       return {
         id: i,
-        name: isCPU ? (options.campaignRival || 'CPU') : ((names[i] && names[i].trim()) ? names[i].trim() : PALETTE[i].name),
+        name: isCPU ? (options.campaignRival || (isTeams ? (i===2 ? 'IA aliada' : 'IA rival ' + (i===1 ? 1 : 2)) : 'CPU')) : ((names[i] && names[i].trim()) ? names[i].trim() : PALETTE[i].name),
         color: skin.color,
         shape: skin.shape,
         r: customPlayers ? Math.max(0,Math.min(size-1,+customPlayers[i].r||0)) : slots[slotKey].r,
@@ -3257,12 +3553,26 @@
       };
     });
 
+    // Reserva de paredes compartida por equipo (49). El equipo que juega segundo recibe la compensación (50).
+    let teams = null;
+    if(isTeams){
+      const balance = !options.isCustomLevel && !isDaily;
+      const mk = (ids, second)=>{
+        const base = ids.reduce((s,i)=> s + players[i].wallsLeft, 0);
+        const extra = (balance && second) ? TEAM_SECOND_WALLS : 0;
+        return { members: ids, wallsLeft: base + extra, wallsStart: base + extra, extra };
+      };
+      teams = { A: mk([0,2], startTeam==='B'), B: mk([1,3], startTeam==='A') };
+      ['A','B'].forEach(k=> teams[k].members.forEach(i=>{ players[i].wallsLeft = teams[k].wallsLeft; players[i].wallsStart = teams[k].wallsStart; }));
+    }
+
     state = {
       size,
       center: objective,
       objective,
       players,
-      currentPlayerIndex: 0,
+      currentPlayerIndex: startTeam==='B' ? 1 : 0,
+      teams, teamGoal, startTeam,
       occupied: Array.from({length:size-1}, ()=>Array(size-1).fill(null)),
       blockedEdges: new Set(),
       walls: [],
@@ -3320,8 +3630,13 @@
     }
     if(ruleset==='party') maybeSpawnPower();
 
-    state.validMoves = computeValidMoves(0);
+    state.validMoves = computeValidMoves(state.currentPlayerIndex);
     render();
+    if(isTeams){
+      const extraTeam = startTeam==='A' ? 'B' : 'A';
+      const extra = teams[extraTeam].extra;
+      showToast(`🎲 Sorteo: abre el Equipo ${startTeam}.` + (extra>0 ? ` El Equipo ${extraTeam} recibe +${extra} pared${extra===1?'':'es'} de compensación.` : ''));
+    }
   }
 
   // ---------- input handling (Pointer Events: works identically for mouse, touch and stylus) ----------
@@ -3370,7 +3685,7 @@
   function updateWallPreview(pt){
     const cs = cellSize();
     const slot = getWallSlotFromPoint(pt.x, pt.y);
-    const evalRes = evaluateWallForMode(slot.r, slot.c, slot.orientation);
+    const evalRes = evaluateWallForPreview(slot.r, slot.c, slot.orientation);
     slot.valid = evalRes.valid;
     previewSlot = slot;
     if(evalRes.reason==='hillSiege'){
@@ -3427,7 +3742,23 @@
     openOverlay('skins');
   });
   document.getElementById('difficultyGroup').addEventListener('change', updateDifficultyHint);
-  function renderNameInputs(count, isCpu){
+  function currentTeamSetup(){
+    const r = document.querySelector('input[name="tsetup"]:checked');
+    return r && r.value==='ally' ? 'ally' : 'local';
+  }
+  function currentTeamGoal(){
+    const r = document.querySelector('input[name="tgoal"]:checked');
+    return r && r.value==='both' ? 'both' : 'first';
+  }
+  // «Yo + IA contra 2 IA»: el jugador 1 es humano; su aliado (asiento 3) y los dos rivales son IA. Usa playerConfigs, igual que el editor.
+  function buildTeamAllyConfigs(size, difficulty){
+    const mid = Math.floor(size/2), w = wallsPerPlayer(size,4);
+    const seats = [ {r:0,c:mid}, {r:mid,c:size-1}, {r:size-1,c:mid}, {r:mid,c:0} ];
+    return seats.map((s,i)=> ({ r:s.r, c:s.c, walls:w, isCPU:i!==0, difficulty }));
+  }
+
+  function renderNameInputs(count, cpuSeatsArg){
+    const cpuSeats = Array.isArray(cpuSeatsArg) ? cpuSeatsArg : (cpuSeatsArg ? [1] : []);
     const current = loadPlayerNames();
     for(let i=0;i<4;i++){
       const existing = document.getElementById('nameInput'+i);
@@ -3435,8 +3766,8 @@
     }
     let html = '';
     for(let i=0;i<count;i++){
-      if(isCpu && i===1){
-        html += `<div class="name-row">${skinDotHTML(i)}<span class="cpu-name-badge">🤖 CPU</span></div>`;
+      if(cpuSeats.includes(i)){
+        html += `<div class="name-row">${skinDotHTML(i)}<span class="cpu-name-badge">🤖 ${cpuSeatsArg && cpuSeats.length>1 ? (i===2 ? 'IA aliada' : 'IA rival') : 'CPU'}</span></div>`;
         continue;
       }
       const val = escapeHtml(current[i] || PALETTE[i].name);
@@ -3451,7 +3782,17 @@
     document.getElementById('modeCpu').disabled = !!(rs && rs.forceLocal);
     if(rs && rs.forceLocal){ document.getElementById('modeLocal').checked = true; }
     const m = currentMode();
-    difficultyFieldset.classList.toggle('hidden', m!=='cpu');
+    const isTeamsMenu = currentRuleset()==='teams';
+    const teamAlly = isTeamsMenu && currentTeamSetup()==='ally';
+    teamSetupFieldset.classList.toggle('hidden', !isTeamsMenu);
+    teamGoalFieldset.classList.toggle('hidden', !isTeamsMenu);
+    if(isTeamsMenu){
+      const gh = document.getElementById('teamGoalHint');
+      if(gh) gh.textContent = currentTeamGoal()==='both'
+        ? 'Los dos aliados tienen que llegar al centro. Al llegar, cada uno espera en una esquina de la casilla; el HUD muestra 0/2 y 1/2.'
+        : 'Gana el equipo del primero que llegue al centro.';
+    }
+    difficultyFieldset.classList.toggle('hidden', !(m==='cpu' || teamAlly));
     roleFieldset.classList.toggle('hidden', !(m==='cpu' && currentRuleset()==='hunter'));
     if(rs && rs.forcePlayers){
       playersFieldset.classList.add('hidden');
@@ -3460,13 +3801,15 @@
     } else {
       playersFieldset.classList.toggle('hidden', m==='cpu');
     }
-    renderNameInputs(currentPlayersCount(), m==='cpu');
+    renderNameInputs(currentPlayersCount(), teamAlly ? [1,2,3] : m==='cpu');
     refreshCustomLevelSelect();
     syncModeButton();
   }
   rulesetSelect.addEventListener('change', updateMenuVisibility);
   document.getElementById('modeGroup').addEventListener('change', updateMenuVisibility);
   document.getElementById('playersGroup').addEventListener('change', updateMenuVisibility);
+  document.getElementById('teamSetupGroup').addEventListener('change', updateMenuVisibility);
+  document.getElementById('teamGoalGroup').addEventListener('change', updateMenuVisibility);
 
   // ---------- ajustes (tema, volumen, vibración, ayudas visuales) ----------
   function setMusicSliderFill(){
@@ -3595,21 +3938,27 @@
     setTimeout(()=>{ hintLine.textContent=`${level.rival}: ${level.intro}`; },0);
   }
 
-  function scoreBotMove(botIdx,m,personality){
-    const bot=state.players[botIdx], myAfter=distanceToCenter(m.r,m.c,state.blockedEdges);
-    let score=-myAfter*10, oppIdx=otherPlayerClosestToCenter(botIdx);
-    if(oppIdx!=null){ const oppDist=distanceToCenter(state.players[oppIdx].r,state.players[oppIdx].c,state.blockedEdges);
+  function scoreBotMove(botIdx,m,personality,edgesOverride){
+    const edges = edgesOverride || state.blockedEdges;
+    const bot=state.players[botIdx], myAfter=distanceToCenter(m.r,m.c,edges);
+    let score=-myAfter*10, oppIdx=otherPlayerClosestToCenter(botIdx, edges);
+    if(m.swap){
+      // intercambio con el aliado: vale la pena sólo si lo que gano yo supera lo que pierde él (queda en mi casilla actual)
+      const al = state.players[allyIdxOf(botIdx)];
+      score -= (distanceToCenter(bot.r,bot.c,edges) - distanceToCenter(al.r,al.c,edges))*10 + 2;
+    }
+    if(oppIdx!=null){ const oppDist=distanceToCenter(state.players[oppIdx].r,state.players[oppIdx].c,edges);
       if(personality==='aggressive')score+=(oppDist-myAfter)*1.8;
       if(personality==='defensive')score+=oppDist*0.25;
       if(personality==='speed'&&myAfter===0)score+=1000;
       if(personality==='strategist')score+=(oppDist-myAfter)*0.9;
     }
-    if(personality==='defensive')score+=distanceToCenter(bot.r,bot.c,state.blockedEdges)-myAfter;
+    if(personality==='defensive')score+=distanceToCenter(bot.r,bot.c,edges)-myAfter;
     if(state.ruleset==='hill'){
       // término "hill": acercarse a la casilla libre más cercana de la zona, valorar estar dentro, no salir de ella
       // y sólo gastar un empujón si me deja adentro
       const inNow = isHillCell(bot.r,bot.c), inAfter = isHillCell(m.r,m.c);
-      let dz = inAfter ? 0 : distanceToHill(m.r,m.c,state.blockedEdges,hillFreeTargets(botIdx));
+      let dz = inAfter ? 0 : distanceToHill(m.r,m.c,edges,hillFreeTargets(botIdx));
       if(!isFinite(dz)) dz = 50;
       score += -dz*25 + (inAfter?40:0) + ((inNow && !inAfter)?-150:0) + (m.push ? (inAfter?35:-100) : 0);
       // con empujones disponibles, arrimarse al rival que va ganando dentro de la zona para poder sacarlo
@@ -3863,7 +4212,7 @@
       });
       const m = MODE_BY_KEY[pending], r = rs(pending);
       const players = r.forcePlayers ? r.forcePlayers+' jugadores' : '2 a 4 jugadores';
-      const who = r.forceLocal ? 'Solo local' : 'Local o vs. IA';
+      const who = r.forceLocal ? (pending==='teams' ? 'Local o Yo + IA' : 'Solo local') : 'Local o vs. IA';
       modeDetail.innerHTML = '<div class="md-inner">'
         + '<div class="md-head"><span class="md-name">'+escapeHtml(r.label)+'</span><span class="stars-row" title="Complejidad">'+starsHTML(m.level,3,13)+'</span></div>'
         + '<p class="md-hint">'+escapeHtml(r.hint)+'</p>'
@@ -4413,6 +4762,7 @@
       presetWalls: state.presetWalls, isCustomLevel: state.isCustomLevel, objective: state.objective,
       turnTimeSeconds: state.turnTimeSeconds, clockMode: state.clockMode, playerConfigs: state.playerConfigs,
       hunterRole: state.fugitiveIdx===1 ? 'hunter' : 'fugitive',
+      teamGoal: state.teamGoal,   // el sorteo del equipo inicial se repite en cada partida
     };
     if(state.mazeInfo){
       cfg.mazeDensity = state.mazeInfo.density;
@@ -4430,6 +4780,8 @@
     const ruleset = currentRuleset();
     const m = currentMode();
     const isCpu = m==='cpu';
+    const teamAlly = ruleset==='teams' && currentTeamSetup()==='ally';
+    const teamGoal = currentTeamGoal();
     const playersCount = currentPlayersCount();
     let size = +document.querySelector('input[name="size"]:checked').value;
     let presetWalls = null, isCustomLevel = false;
@@ -4442,19 +4794,20 @@
 
     const names = loadPlayerNames();
     for(let i=0;i<playersCount;i++){
-      if(isCpu && i===1) continue;
+      if((isCpu && i===1) || (teamAlly && i>0)) continue;
       const inp = document.getElementById('nameInput'+i);
       if(inp){ names[i] = inp.value.trim(); }
     }
     savePlayerNames(names);
     const hunterRole = currentHunterRole();
-    saveLastSetup({ playersCount, size: +document.querySelector('input[name="size"]:checked').value, mode:m, difficulty, ruleset,
+    saveLastSetup({ playersCount, size: +document.querySelector('input[name="size"]:checked').value, mode:m, difficulty, ruleset, teamGoal, teamSetup: currentTeamSetup(),
       mazeDensity: currentMazeDensity(), mazeMine: !!mazeMineCheck.checked, hunterRole,
       blitzSeconds: blitzPrefs.seconds, blitzClock: blitzPrefs.clock });
 
     const mazeOpts = (ruleset==='maze' && !presetWalls) ? { mazeSeed: mazeMenuSeed, mazeDensity: currentMazeDensity(), mazeMine: mazeMineCheck.checked ? loadUserPatterns() : [] } : {};
     const blitzOpts = (ruleset==='blitz' && !isCustomLevel) ? blitzSetup(size, playersCount) : {};
-    initGame(playersCount, size, Object.assign({ isCpu, difficulty, names, ruleset, presetWalls, isCustomLevel, hunterRole }, mazeOpts, blitzOpts));
+    const teamOpts = ruleset==='teams' ? { teamGoal, playerConfigs: teamAlly ? buildTeamAllyConfigs(size, difficulty) : null } : {};
+    initGame(playersCount, size, Object.assign({ isCpu, difficulty, names, ruleset, presetWalls, isCustomLevel, hunterRole }, mazeOpts, blitzOpts, teamOpts));
     mazeMenuSeed = newMazeSeed();                    // el próximo mapa del menú ya es otro
     menuScreen.classList.add('hidden');
     gameScreen.classList.remove('hidden');
@@ -4530,6 +4883,8 @@
       const dr = document.querySelector('input[name="mazeDensity"][value="'+cfg.mazeDensity+'"]'); if(dr) dr.checked = true;
     }
     if(cfg.mazeMine) mazeMineCheck.checked = true;
+    if(cfg.teamGoal==='both'){ const tg = document.getElementById('tgBoth'); if(tg) tg.checked = true; }
+    if(cfg.teamSetup==='ally'){ const ts = document.getElementById('tsAlly'); if(ts) ts.checked = true; }
     if(cfg.hunterRole==='hunter'){ const hr = document.getElementById('roleHunter'); if(hr) hr.checked = true; }
     if(BLITZ_SECONDS_CHOICES.indexOf(+cfg.blitzSeconds)>=0) blitzPrefs.seconds = +cfg.blitzSeconds;
     if(cfg.blitzClock==='chess') blitzPrefs.clock = 'chess';

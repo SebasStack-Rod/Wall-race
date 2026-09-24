@@ -403,6 +403,11 @@ legend{ font-weight:600; margin-bottom:10px; font-size:.9rem; color:var(--ink-so
 @keyframes movePulse{ 0%,100%{ opacity:.55; } 50%{ opacity:.95; } }
 .move-dot{ animation:movePulse 1.4s ease-in-out infinite; pointer-events:none; }
 .trail-dot{ animation:movePulse 1.4s ease-in-out infinite; pointer-events:none; }   /* huellas del fugitivo */
+/* Niebla de guerra: la máscara sigue a la ficha con una transición suave en vez de un corte brusco */
+#fogMaskHole{ transition:cx 150ms ease, cy 150ms ease, r 150ms ease; }
+#fogOverlay{ transition:opacity 200ms ease; }
+.fog-echo{ filter:saturate(.6); }   /* eco de un rival fuera de radio: la opacidad (según su vida) la fija el propio render */
+
 @keyframes turnRing{ 0%,100%{ opacity:.25; transform:scale(1); } 50%{ opacity:.55; transform:scale(1.16); } }
 .turn-ring{ transform-box:fill-box; transform-origin:center; animation:turnRing 1.8s ease-in-out infinite; }
 #piecesGroup{ pointer-events:none; }   /* las fichas no tapan los clics: hace falta para tocar la casilla de un rival y empujarlo */
@@ -644,3 +649,16 @@ body::after{
 @media (min-width: 1100px){
   body{ padding-top:36px; padding-bottom:36px; }
 }
+
+/* ---------- 2v2: identidad de equipo, marcador y reserva compartida ---------- */
+.team-dot{ display:inline-block; width:13px; height:13px; border-radius:50%; box-sizing:border-box; flex:0 0 auto; }
+.team-A .team-dot{ border:3px solid #fff; box-shadow:0 0 0 1px rgba(0,0,0,.55), inset 0 0 0 1px rgba(0,0,0,.35); }
+.team-B .team-dot{ border:3px dashed #16161a; box-shadow:0 0 0 1px rgba(255,255,255,.65); background:rgba(255,255,255,.35); }
+.cpu-tag.team-tag{ gap:5px; }
+.team-hud{ display:flex; gap:8px; margin:0 0 12px; }
+.team-chip{ flex:1 1 0; min-width:0; display:flex; align-items:center; flex-wrap:wrap; gap:4px 7px; padding:8px 10px; border-radius:12px; background:var(--panel-2); border:2px solid transparent; font-size:.8rem; transition:border-color 150ms; }
+.team-chip.active{ border-color:var(--accent); }
+.team-chip b{ font-weight:700; }
+.team-prog, .team-walls{ font-weight:700; font-size:.76rem; color:var(--ink-soft); white-space:nowrap; }
+.team-walls{ margin-left:auto; color:var(--ink); }
+.team-ring{ transition:stroke-width 150ms; }

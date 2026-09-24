@@ -53,6 +53,24 @@
       <p class="field-hint">La IA juega el otro rol. El fugitivo gana llegando al centro; el cazador, atrapándolo o agotando las rondas.</p>
     </fieldset>
 
+    <fieldset id="teamSetupFieldset" class="hidden">
+      <legend>Quién juega el 2v2</legend>
+      <div class="segmented" id="teamSetupGroup">
+        <input type="radio" name="tsetup" id="tsLocal" value="local" checked><label for="tsLocal">👥 4 personas</label>
+        <input type="radio" name="tsetup" id="tsAlly" value="ally"><label for="tsAlly">🤖 Yo + IA contra 2 IA</label>
+      </div>
+      <p class="field-hint">Con «Yo + IA», tu aliado y los dos rivales los juega la IA con la dificultad elegida. La IA aliada evita las paredes que alarguen tu camino.</p>
+    </fieldset>
+
+    <fieldset id="teamGoalFieldset" class="hidden">
+      <legend>Objetivo del equipo</legend>
+      <div class="segmented" id="teamGoalGroup">
+        <input type="radio" name="tgoal" id="tgFirst" value="first" checked><label for="tgFirst">🏁 El primero que llega</label>
+        <input type="radio" name="tgoal" id="tgBoth" value="both"><label for="tgBoth">🤝 Deben llegar los dos</label>
+      </div>
+      <p class="field-hint" id="teamGoalHint"></p>
+    </fieldset>
+
     <fieldset id="playersFieldset">
       <legend>Cantidad de jugadores</legend>
       <div class="segmented" id="playersGroup">
@@ -172,11 +190,22 @@
             <path d="M0 8H16M8 0V8M4 8V16M12 0V8" stroke="#57534a" stroke-width=".9" fill="none"/>
             <circle cx="3" cy="3" r=".8" fill="#b5b0a3"/><circle cx="12" cy="12" r=".8" fill="#b5b0a3"/>
           </pattern>
+          <!-- niebla de guerra: gradiente radial (relativo al propio círculo) usado como máscara -->
+          <radialGradient id="fogGrad">
+            <stop offset="0%" stop-color="black"/>
+            <stop offset="65%" stop-color="black"/>
+            <stop offset="100%" stop-color="white"/>
+          </radialGradient>
+          <mask id="fogMask" maskUnits="userSpaceOnUse" x="0" y="0" width="630" height="630">
+            <rect x="0" y="0" width="630" height="630" fill="white"/>
+            <circle id="fogMaskHole" cx="315" cy="315" r="140" fill="url(#fogGrad)"/>
+          </mask>
         </defs>
         <g id="gridGroup"></g>
         <g id="movesGroup"></g>
         <g id="wallsGroup"></g>
         <g id="piecesGroup"></g>
+        <rect id="fogOverlay" x="0" y="0" width="630" height="630" fill="rgba(10,12,22,0.7)" mask="url(#fogMask)" opacity="0" pointer-events="none"></rect>
         <g id="emotesGroup" pointer-events="none"></g>
         <rect id="wallPreview" x="0" y="0" width="0" height="0" fill="transparent" opacity="0" pointer-events="none"></rect>
       </svg>
@@ -185,6 +214,7 @@
 
     <aside class="side-panel">
       <h3>Jugadores</h3>
+      <div id="teamHud" class="team-hud hidden" aria-live="polite"></div>
       <ul id="playersList"></ul>
     </aside>
   </div>
@@ -219,6 +249,16 @@
       <button class="kbtn grey block" id="settingsBtn">⚙️ Ajustes</button>
       <button class="kbtn grey block" id="restartBtn">Reiniciar</button>
       <button class="kbtn red block" id="menuBtn">Salir al menú</button>
+    </div>
+  </div>
+</div>
+
+<div id="handoffOverlay" class="overlay-backdrop hidden">
+  <div class="modal-card" id="handoffCard">
+    <h2 id="handoffTitle">Pasá el celular</h2>
+    <p id="handoffMsg">El siguiente jugador toma el control.</p>
+    <div class="modal-actions">
+      <button class="kbtn yellow big block" id="handoffReadyBtn">Listo</button>
     </div>
   </div>
 </div>
