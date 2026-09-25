@@ -384,6 +384,9 @@ legend{ font-weight:600; margin-bottom:10px; font-size:.9rem; color:var(--ink-so
 
 /* ================= ANIMACIONES ================= */
 .power-token{ pointer-events:none; }
+.power-token.fading{ animation:powerBlink 900ms ease-in-out infinite; }
+@keyframes powerBlink{ 0%,100%{ opacity:1; } 50%{ opacity:.35; } }
+.shield-ring{ transform-box:fill-box; transform-origin:center; animation:powerSpin 6s linear infinite; }
 @keyframes powerSpin{ 0%{ transform:rotate(0) scale(1); } 50%{ transform:rotate(180deg) scale(1.15); } 100%{ transform:rotate(360deg) scale(1); } }
 .power-token .spin{ transform-box:fill-box; transform-origin:center; animation:powerSpin 2.4s linear infinite; }
 @keyframes piecePop{ 0%{ transform:scale(.35); opacity:.3; } 65%{ transform:scale(1.18); } 100%{ transform:scale(1); opacity:1; } }
@@ -662,3 +665,17 @@ body::after{
 .team-prog, .team-walls{ font-weight:700; font-size:.76rem; color:var(--ink-soft); white-space:nowrap; }
 .team-walls{ margin-left:auto; color:var(--ink); }
 .team-ring{ transition:stroke-width 150ms; }
+
+/* ================= FIESTA: barra de poderes ================= */
+.power-bar{ margin:0 0 8px; }
+.power-btns{ display:flex; flex-wrap:wrap; gap:8px; margin:0 0 6px; }
+.power-btns .power-btn{ flex:1 1 auto; }
+.power-empty{ font-size:.82rem; color:var(--ink-soft); padding:4px 2px; }
+.power-note{ display:flex; flex-direction:column; gap:2px; font-size:.8rem; line-height:1.35; color:var(--ink-soft); }
+.power-help{ margin:6px 0 0; font-size:.8rem; color:var(--ink-soft); }
+.power-help summary{ cursor:pointer; font-weight:600; min-height:32px; display:flex; align-items:center; }
+.power-help ul{ list-style:none; margin:4px 0 0; padding:0; display:flex; flex-direction:column; gap:8px; }
+.power-help li{ line-height:1.35; }
+.power-help li em{ font-style:normal; opacity:.85; margin-left:4px; }
+.cpu-tag.power-tag{ gap:3px; }
+.cpu-tag.power-tag.on{ background:var(--accent); color:var(--accent-ink); }
