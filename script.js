@@ -88,14 +88,50 @@
   const HILL_PUSHES = 2;
   const HILL_MIN_ACCESSES = 2;      // la zona nunca puede quedar con menos accesos que estos
   const HILL_TARGET_TEXT = Object.keys(HILL_TARGET).map(n=> `${n} jugadores: ${HILL_TARGET[n]} turnos`).join(' · ');
+  // ---------- Fiesta: catálogo de poderes ----------
+  // kind 'instant': se aplica al recogerlo. kind 'stored': se guarda (hasta PARTY_MAX_HELD, sin repetidos) y se usa en el propio turno.
+  // Reglas para que ninguno rompa la partida: UN poder por turno (el turno extra cuenta como el mismo turno), cada poder tiene
+  // su tope (ver abajo), el poder en el tablero aparece en una casilla "justa" y se desvanece si nadie lo agarra.
+  const PARTY_MAX_HELD = 2;            // poderes guardados a la vez por jugador
+  const PARTY_TOKEN_TTL = 4;           // rondas que un poder dura en el tablero
+  const PARTY_RESPAWN_MIN = 2;         // rondas hasta el siguiente poder (+0 o +1 al azar)
+  const PARTY_SPAWN_MAX_DIST = 4;      // el poder aparece a lo sumo a 4 pasos de quien más cerca esté
+  const PARTY_WALL_BONUS_MAX = 2;      // Pared extra: como mucho +2 por jugador y partida
+  const PARTY_SHIELD_ROUNDS = 2;       // Escudo: rondas de protección
+  const PARTY_STUN_IMMUNE_TURNS = 2;   // tras perder un turno por aturdimiento, 2 turnos propios sin poder aturdirlo de nuevo
+  const PARTY_STUN_MAX_LEAD = 1;       // Aturdir: sólo contra un rival que no esté a más de 1 paso detrás de quien lo usa
+  const PARTY_POWERS = {
+    pared_extra:  { name:'Pared extra',  emoji:'🧱', icon:'bars',         kind:'instant', weight:3, catchUp:false, duration:'Permanente',
+      desc:`Suma 1 pared a tu reserva al instante (máximo +${PARTY_WALL_BONUS_MAX} por partida).` },
+    paso_doble:   { name:'Paso doble',   emoji:'👟', icon:'exclamations', kind:'stored',  weight:3, catchUp:true,  duration:'1 movimiento',
+      desc:'Este turno avanzás 2 casillas en línea recta, sin cruzar paredes ni fichas. No sirve para pisar el centro.' },
+    turno_extra:  { name:'Turno extra',  emoji:'⏩', icon:'star',         kind:'stored',  weight:2, catchUp:true,  duration:'1 acción extra',
+      desc:'Jugás dos acciones seguidas (mover o poner pared).' },
+    aturdido:     { name:'Aturdir',      emoji:'💫', icon:'swirl',        kind:'stored',  weight:2, catchUp:true,  duration:'1 turno del rival',
+      desc:`El rival mejor ubicado pierde su próximo turno y después queda ${PARTY_STUN_IMMUNE_TURNS} turnos sin poder ser aturdido. Sólo sirve contra quien va igual o mejor que vos (o a lo sumo ${PARTY_STUN_MAX_LEAD} paso detrás).` },
+    romper_pared: { name:'Romper pared', emoji:'🔨', icon:'cross',        kind:'stored',  weight:2, catchUp:true,  duration:'Instantáneo',
+      desc:'Quita la pared de un rival que más te alarga el camino, siempre que a vos te ayude más que a cualquier rival.' },
+    escudo:       { name:'Escudo',       emoji:'🛡️', icon:'heart',        kind:'stored',  weight:2, catchUp:false, duration:`${PARTY_SHIELD_ROUNDS} rondas`,
+      desc:`Durante ${PARTY_SHIELD_ROUNDS} rondas nadie puede aturdirte.` },
+  };
+  const PARTY_TYPES = Object.keys(PARTY_POWERS);
+  const PARTY_BOT_USE = { easy:0.5, normal:0.75, hard:0.95, expert:1 };   // con qué ganas cada IA usa un poder que le conviene
+  const PARTY_BOT_DETOUR = { easy:0, normal:1, hard:1, expert:2 };        // pasos de desvío que acepta para agarrar un poder
+  // Espejo: valores calibrados con 1000 partidas IA-experta-vs-IA-experta por tamaño (52.0% de victorias de quien
+  // abre, ningún tamaño llega al 58%) más un chequeo con IA normal (5×5 sube a 63%, así que la compensación
+  // queda en un valor moderado en vez de en 0). Objeto (no const suelta) para poder recalibrar en caliente en pruebas.
+  const MIRROR_CFG = {
+    cost: 1,          // paredes que se descuentan de tu reserva por cada pared que colocás (1 o 2; la copia reflejada nunca se paga aparte)
+    secondBonus: 1,   // paredes extra para quien abre segundo, tras el sorteo
+  };
   const RULESETS = {
     classic: { label:'Clásico', hint:'Las reglas de siempre: movete y bloqueá con paredes hasta llegar al centro.' },
     fog:     { label:'Niebla de guerra', hint:'Sólo ves las paredes cercanas a quien juega en ese turno. Las lejanas siguen bloqueando aunque no se vean.', forcePlayers:null },
     teams:   { label:'2v2 (equipos)', hint:'4 fichas: Equipo A (jugadores 1 y 3) contra Equipo B (jugadores 2 y 4). Cada equipo comparte una sola reserva de paredes, empieza un equipo sorteado (el otro recibe una pared de compensación) y podés intercambiar lugar con tu aliado. Gana el primero que llega al centro, o el equipo cuyos dos aliados llegan. Se puede jugar entre 4 personas o «Yo + IA contra 2 IA».', forcePlayers:4, forceLocal:true },
-    party:   { label:'Fiesta', hint:'De vez en cuando aparece un poder en el tablero: pared extra, turno extra o aturdir al rival mejor ubicado.' },
+    party:   { label:'Fiesta', hint:`Cada tanto aparece un poder en una casilla justa del tablero y dura ${PARTY_TOKEN_TTL} rondas si nadie lo agarra. Pared extra se aplica al instante; los demás (paso doble, turno extra, aturdir, romper pared y escudo) los guardás —hasta ${PARTY_MAX_HELD}— y los usás en tu turno. Un poder por turno, y cada uno trae su tope para que la partida siga pareja. La IA también los usa.` },
     maze:    { label:'Laberinto', hint:'El tablero arranca con paredes al azar ya colocadas (o con tu propio diseño del editor de niveles), garantizando que siempre haya camino.' },
     blitz:   { label:'Contrarreloj', hint:'Cada turno corre contra el reloj (10, 20, 30 o 45 s; por defecto 10 s + el tamaño del tablero), sea para mover o para poner una pared. Si se acaba, se juega solo el paso que más te acerca al centro (nunca una pared). Con 2 jugadores también hay reloj de ajedrez: 60 s de banco y +3 s por jugada; pierde quien llega a 0.' },
-    mirror:  { label:'Espejo', hint:'Sólo para 2 jugadores. Cada pared que colocás aparece también reflejada en el punto opuesto del tablero.', forcePlayers:2 },
+    mirror:  { label:'Espejo', hint:'Cada pared que colocás aparece reflejada: con 2 jugadores, en el punto opuesto del tablero; con 4, también girada en cuartos de vuelta hacia las otras dos esquinas. Al empezar se sortea quién abre; quien juega segundo recibe una pared extra de compensación.', allowedPlayers:[2,4] },
     hill:    { label:'Rey de la colina', hint:`No alcanza con pisar el centro: hay que terminar turnos SEGUIDOS dentro de la zona central (${HILL_TARGET_TEXT}). Si salís de la zona o te empujan, el conteo vuelve a 0. Cada jugador tiene ${HILL_PUSHES} empujones para sacar al rival, y no se puede cerrar la zona a menos de ${HILL_MIN_ACCESSES} accesos.` },
     hunter:  { label:'Cazador y fugitivo', hint:'El Jugador 1 es el fugitivo (contra la IA elegís tu rol) y gana si llega al centro. Los cazadores ganan atrapándolo —terminar su movimiento junto al fugitivo, sin pared de por medio— o si se acaba el límite de rondas. El fugitivo tiene 2 sprints y deja huellas durante 2 turnos; los cazadores comparten un pozo de paredes.' },
   };
@@ -154,7 +190,6 @@
     return base;
   }
   let campaignData=loadCampaign();
-  const PARTY_TYPES = ['pared_extra','turno_extra','aturdido'];
   // ---------- logros (con categoría, tier, medalla, recompensa y progreso) ----------
   function totalWins(s){ return (s.winsBySlot||[0,0,0,0]).reduce((a,b)=>a+b,0); }
   function prog(cur, goal){ return [Math.max(0, Math.min(cur||0, goal)), goal]; }
@@ -231,6 +266,10 @@
   const moveModeBtn = document.getElementById('moveModeBtn');
   const wallModeBtn = document.getElementById('wallModeBtn');
   const sprintBtn = document.getElementById('sprintBtn');
+  const powerBar = document.getElementById('powerBar');
+  const powerBtns = document.getElementById('powerBtns');
+  const powerNote = document.getElementById('powerNote');
+  const powerHelpList = document.getElementById('powerHelpList');
   const sprintCount = document.getElementById('sprintCount');
   const roleFieldset = document.getElementById('roleFieldset');
   const hintLine = document.getElementById('hintLine');
@@ -326,6 +365,14 @@
   const handoffTitle = document.getElementById('handoffTitle');
   const handoffMsg = document.getElementById('handoffMsg');
   const handoffReadyBtn = document.getElementById('handoffReadyBtn');
+  const mirrorCoinOverlay = document.getElementById('mirrorCoinOverlay');
+  const mirrorCoinEl = document.getElementById('mirrorCoin');
+  const mirrorCoinText = document.getElementById('mirrorCoinText');
+  const mirrorCoinBtn = document.getElementById('mirrorCoinBtn');
+  const mirrorPreviewEls = [0,1,2].map(k=> ({
+    rect: document.getElementById('wallMirrorPreview'+k),
+    line: document.getElementById('wallMirrorLine'+k),
+  }));
   const moreOverlay = document.getElementById('moreOverlay');
   const moreLinkBtn = document.getElementById('moreLinkBtn');
   const closeMoreBtn = document.getElementById('closeMoreBtn');
@@ -377,7 +424,7 @@
   const modeDetail = document.getElementById('modeDetail');
   const modesConfirmBtn = document.getElementById('modesConfirmBtn');
   const modesCloseBtn = document.getElementById('modesCloseBtn');
-  const overlayEls = { campaign:campaignOverlay, modes:modesOverlay, win:winOverlay, confirm:confirmOverlay, settings:settingsOverlay, tutorial:tutorialOverlay, stats:statsOverlay, skins:skinsOverlay, achievements:achievementsOverlay, daily:dailyOverlay, pause:pauseOverlay, more:moreOverlay, shop:shopOverlay, namePrompt:namePromptOverlay, handoff:handoffOverlay };
+  const overlayEls = { campaign:campaignOverlay, modes:modesOverlay, win:winOverlay, confirm:confirmOverlay, settings:settingsOverlay, tutorial:tutorialOverlay, stats:statsOverlay, skins:skinsOverlay, achievements:achievementsOverlay, daily:dailyOverlay, pause:pauseOverlay, more:moreOverlay, shop:shopOverlay, namePrompt:namePromptOverlay, handoff:handoffOverlay, mirrorCoin:mirrorCoinOverlay };
 
   let state = null;
   let mode = 'move'; // 'move' | 'wall'
@@ -635,8 +682,39 @@
     if(viewerIdx==null) return evaluateWallForMode(r,c,orientation);
     return evaluateWallPlacement(r,c,orientation, visibleOccupiedFor(viewerIdx), visibleBlockedEdgesFor(viewerIdx));
   }
-  // ---------- Modo Espejo: valida y arma también la pared reflejada ----------
+  // ---------- Modo Espejo: valida y arma también la(s) pared(es) reflejada(s) ----------
+  // Reflejo puntual (180°, giro de media vuelta): usado con 2 jugadores. Misma orientación.
   function mirrorSlot(r,c){ return { r: state.size-2-r, c: state.size-2-c }; }
+  // Un cuarto de vuelta (90° en sentido horario) de una ranura de pared: la posición gira y la orientación
+  // se intercambia (horizontal<->vertical). Aplicado dos veces da exactamente mirrorSlot (ver mirrorSlots).
+  function rotateSlot90(r,c){ return { r:c, c: state.size-2-r }; }
+  // Las 3 copias giradas en cuartos de vuelta (90°,180°,270°) de una pared, cada una con su orientación.
+  // Con 4 jugadores se usan las 3; con 2, sólo la de 180° (que coincide con mirrorSlot).
+  function mirrorSlots(r,c,orientation){
+    const copies = [];
+    let cur = { r, c, orientation };
+    for(let k=0;k<3;k++){
+      const rot = rotateSlot90(cur.r, cur.c);
+      cur = { r: rot.r, c: rot.c, orientation: cur.orientation==='h' ? 'v' : 'h' };
+      copies.push(cur);
+    }
+    return copies;
+  }
+  // Copias que hacen falta para esta pared (dedupeadas entre sí y contra el original): con 4 jugadores, las 3
+  // rotaciones de cuarto de vuelta; con 2, sólo la de 180°. La usan tanto la validación real (evaluateWallForMode)
+  // como el preview (25), para que nunca puedan quedar desincronizados.
+  function mirrorNeededCopies(r,c,orientation){
+    const rotCopies = mirrorSlots(r,c,orientation);                 // [90°,180°,270°]
+    const need = state.players.length>=4 ? rotCopies : [rotCopies[1]];  // 2 jugadores: sólo 180°
+    const seen = new Set([r+','+c+','+orientation]);
+    const uniq = [];
+    for(const m of need){
+      const k = m.r+','+m.c+','+m.orientation;
+      if(seen.has(k)) continue;              // coincide con el original o con otra copia ya contada
+      seen.add(k); uniq.push(m);
+    }
+    return uniq;
+  }
   function evaluateWallForMode(r,c,orientation){
     const base = evaluateWallPlacement(r,c,orientation);
     if(!base.valid) return base;
@@ -650,18 +728,22 @@
       return base;
     }
     if(state.ruleset!=='mirror') return base;
-    const m = mirrorSlot(r,c);
-    if(m.r===r && m.c===c) return base; // cae en su propio reflejo, no hace falta espejo aparte
-    if(!canPlaceWallSlot(m.r,m.c,orientation)) return { valid:false };
-    const mEdges = wallEdges(m.r,m.c,orientation);
+    const uniq = mirrorNeededCopies(r,c,orientation);
+    if(!uniq.length) return base;            // cae en su propio reflejo, no hace falta espejo aparte
+    for(const m of uniq){
+      if(!canPlaceWallSlot(m.r,m.c,m.orientation)) return { valid:false, reason:'mirrorClash' };
+    }
     const testSet = new Set(state.blockedEdges);
     base.edges.forEach(e=> testSet.add(edgeKey(e[0],e[1],e[2],e[3])));
-    mEdges.forEach(e=> testSet.add(edgeKey(e[0],e[1],e[2],e[3])));
+    const mirrorCopies = uniq.map(m=> ({ r:m.r, c:m.c, orientation:m.orientation, edges: wallEdges(m.r,m.c,m.orientation) }));
+    mirrorCopies.forEach(mc=> mc.edges.forEach(e=> testSet.add(edgeKey(e[0],e[1],e[2],e[3]))));
     for(const p of state.players){
-      if(!hasPath(p.r,p.c,state.objective.r,state.objective.c,testSet,state.size)) return { valid:false };
+      if(!hasPath(p.r,p.c,state.objective.r,state.objective.c,testSet,state.size)) return { valid:false, reason:'mirrorBlocks', blockedPlayer:p };
     }
-    return { valid:true, edges:base.edges, mirrorEdges:mEdges };
+    const mirrorEdges = mirrorCopies.reduce((a,mc)=> a.concat(mc.edges), []);   // compatibilidad: lista plana
+    return { valid:true, edges:base.edges, mirrorEdges, mirrorCopies };
   }
+  function mirrorWallCost(){ return state.ruleset==='mirror' ? MIRROR_CFG.cost : 1; }
 
   // ---------- Modo Rey de la colina: zona central proporcional al tablero ----------
   // La zona son las casillas a distancia Manhattan <= radio del centro: radio 1 (cruz de 5 casillas)
@@ -1266,6 +1348,18 @@
         moves.push({ r:lr, c:lc, sprint:true });
       }
     }
+    // Fiesta: Paso doble guardado (un poder por turno; no vale para pisar el centro)
+    if(state.ruleset==='party' && p.powers && p.powers.indexOf('paso_doble')>=0
+       && !(state.party && state.party.usedThisTurn && playerIndex===state.currentPlayerIndex)){
+      for(const [dr,dc] of DIRS4){
+        const mr=p.r+dr, mc=p.c+dc, lr=p.r+2*dr, lc=p.c+2*dc;
+        if(lr<0||lc<0||lr>=state.size||lc>=state.size) continue;
+        if(lr===state.center.r && lc===state.center.c) continue;
+        if(isBlocked(p.r,p.c,mr,mc,state.blockedEdges) || isBlocked(mr,mc,lr,lc,state.blockedEdges)) continue;
+        if(state.players.some(pl=> pl!==p && ((pl.r===mr&&pl.c===mc) || (pl.r===lr&&pl.c===lc)))) continue;
+        moves.push({ r:lr, c:lc, sprint:true });
+      }
+    }
     return moves;
   }
 
@@ -1276,16 +1370,17 @@
       next = (next+1) % n;
       const cand = state.players[next];
       if(cand.arrived) continue;                 // 2v2 «llegan los dos»: quien ya llegó no vuelve a jugar
-      if(cand.stunned){ cand.stunned = false; continue; }
+      if(cand.stunned){ cand.stunned = false; partyStunSkipped(cand); continue; }
       if(n>1 && cand.wallsLeft<=0 && computeValidMoves(next).length===0) continue;
       break;
     }
     const prevIndex = state.currentPlayerIndex;
     state.currentPlayerIndex = next;
     state.sprintArmed = false;
+    if(state.ruleset==='party') partyOnTurnStart(next, prevIndex);
     state.validMoves = computeValidMoves(next);
     const cpNext = state.players[next];
-    mode = (!state.validMoves.length && cpNext.wallsLeft>0 && !cpNext.isCPU) ? 'wall' : 'move';
+    mode = (!state.validMoves.length && cpNext.wallsLeft>=mirrorWallCost() && !cpNext.isCPU) ? 'wall' : 'move';
     tickFogEchoes();
     // Niebla de guerra con 2+ humanos en el mismo dispositivo: al pasar a otro humano, lo que reveló quien
     // jugó antes anularía la niebla si se ve directo. Cortina "pasá el celular" hasta que el próximo confirme.
@@ -1327,6 +1422,47 @@
     openOverlay('handoff');
   }
   handoffReadyBtn.addEventListener('click', ()=> closeOverlay('handoff'));
+  // Espejo (24): sorteo animado de quién abre. La decisión ya está tomada y aplicada al estado antes de
+  // llamar a esto — la animación es puramente cosmética y nunca puede dejar la partida en un estado distinto
+  // del que ya tiene. Pausa el temporizador de la IA a mano (no confía en el chequeo interno de openOverlay,
+  // que en algunos puntos de entrada corre antes de que gameScreen deje de estar oculto).
+  let mirrorCoinFlicker = null, mirrorCoinTimer1 = null, mirrorCoinTimer2 = null;
+  function runMirrorCoinToss(openerIdx, bonus){
+    invalidateBotTimer();
+    clearTurnTimer();
+    if(mirrorCoinFlicker){ clearInterval(mirrorCoinFlicker); mirrorCoinFlicker=null; }
+    if(mirrorCoinTimer1){ clearTimeout(mirrorCoinTimer1); mirrorCoinTimer1=null; }
+    if(mirrorCoinTimer2){ clearTimeout(mirrorCoinTimer2); mirrorCoinTimer2=null; }
+    const opener = state.players[openerIdx], other = state.players[1-openerIdx];
+    const paint = (p)=>{ mirrorCoinEl.style.background = p.color; mirrorCoinEl.textContent = String(p.id+1); };
+    const reveal = ()=>{
+      mirrorCoinEl.classList.remove('tossing');
+      paint(opener);
+      mirrorCoinText.innerHTML = `Abre <b>${escapeHtml(opener.name)}</b>.`
+        + (bonus>0 ? ` ${escapeHtml(other.name)} recibe +${bonus} pared${bonus===1?'':'es'} de compensación.` : '');
+      mirrorCoinBtn.disabled = false;
+    };
+    mirrorCoinBtn.disabled = true;
+    mirrorCoinText.textContent = 'Sorteando quién abre…';
+    if(window.__QUORIDOR_TEST__){
+      // en pruebas: sin animación real (nada de setInterval/setTimeout de por medio), resultado inmediato
+      openOverlay('mirrorCoin');
+      reveal();
+      closeOverlay('mirrorCoin');
+      return;
+    }
+    paint(state.players[0]);
+    mirrorCoinEl.classList.add('tossing');
+    openOverlay('mirrorCoin');
+    let tick = 0;
+    mirrorCoinFlicker = setInterval(()=>{ tick++; paint(tick%2===0 ? state.players[0] : state.players[1]); }, 110);
+    mirrorCoinTimer1 = setTimeout(()=>{
+      clearInterval(mirrorCoinFlicker); mirrorCoinFlicker=null;
+      reveal();
+      mirrorCoinTimer2 = setTimeout(()=> closeOverlay('mirrorCoin'), 1000);
+    }, 1000);
+  }
+  mirrorCoinBtn.addEventListener('click', ()=>{ if(!mirrorCoinBtn.disabled) closeOverlay('mirrorCoin'); });
   function closeTopOverlay(){
     if(!overlayStack.length) return false;
     closeOverlay(overlayStack[overlayStack.length-1]);
@@ -2390,7 +2526,7 @@
     if(cpNow && cpNow.isCPU) return;
     if(m==='wall'){
       const cp = state.players[state.currentPlayerIndex];
-      if(!cp || cp.wallsLeft<=0) return;
+      if(!cp || cp.wallsLeft<mirrorWallCost()) return;
     }
     mode = m;
     hideWallPreview();
@@ -2400,7 +2536,7 @@
   }
   function updateModeUI(){
     const cp = state && state.players[state.currentPlayerIndex];
-    const canWall = !!cp && cp.wallsLeft>0 && !(state && state.winner);
+    const canWall = !!cp && cp.wallsLeft>=mirrorWallCost() && !(state && state.winner);
     const isHumanTurn = !cp || !cp.isCPU;
     moveModeBtn.classList.toggle('active', mode==='move');
     wallModeBtn.classList.toggle('active', mode==='wall');
@@ -2413,9 +2549,14 @@
     hintLine.textContent = mapTag + (mode==='wall'
       ? 'Arrastrá sobre el tablero para ubicar la pared y soltá para confirmarla.'
       : (state && state.sprintArmed
-        ? 'Sprint: tocá una casilla a dos pasos en línea recta.'
+        ? (state.ruleset==='party' ? 'Paso doble: tocá una casilla a dos pasos en línea recta (no vale para el centro).' : 'Sprint: tocá una casilla a dos pasos en línea recta.')
         : 'Tocá una casilla resaltada para moverte.' + (canPush ? ' La flecha empuja al rival.' : '') + ((state && state.validMoves.some(m=> m.swap)) ? ' El ⇄ intercambia lugar con tu aliado (gasta el turno).' : '')));
+    if(state && state.ruleset==='party' && !state.winner && mode!=='wall' && !state.sprintArmed){
+      const me = state.players[state.currentPlayerIndex];
+      if(me && me.fx && me.fx.extra>0) hintLine.textContent = (me.fx.extra===1 ? 'Turno extra activo: después de esta acción jugás otra. ' : 'Acción extra: es la última de este turno. ') + hintLine.textContent;
+    }
     updateSprintBtn();
+    updatePowerBar();
   }
   // Botón de sprint del HUD (sólo existe en Cazador y fugitivo; sólo lo usa el fugitivo humano en su turno)
   function updateSprintBtn(){
@@ -2439,6 +2580,26 @@
     redrawMoves();          // sólo los puntos: no reinicia el reloj de turno ni vuelve a llamar a la IA
     updateModeUI();
     playToggleSound(state.sprintArmed);
+  });
+  powerBtns.addEventListener('click', e=>{
+    const btn = e.target.closest ? e.target.closest('.power-btn') : null;
+    if(!btn || btn.disabled || !state || state.ruleset!=='party' || state.winner) return;
+    const idx = state.currentPlayerIndex;
+    if(state.players[idx].isCPU) return;
+    const key = btn.dataset.power;
+    if(!partyUse(idx, key)) return;
+    hideWallPreview();
+    previewSlot = null;
+    if(key==='paso_doble'){          // sólo arma/desarma: se gasta al hacer el paso doble
+      mode = 'move';
+      redrawMoves();                 // sólo los puntos: no reinicia el reloj de turno ni vuelve a llamar a la IA
+      updateModeUI();
+      playToggleSound(state.sprintArmed);
+    } else {
+      if(key==='romper_pared') playWallSound(); else playToggleSound(true);
+      vibrate(20);
+      partyRerender();
+    }
   });
   moveModeBtn.addEventListener('click', ()=> setMode('move'));
   wallModeBtn.addEventListener('click', ()=> setMode('wall'));
@@ -2607,11 +2768,12 @@
     // el estado real completo: así no tiene ventaja sobre un humano jugando la misma partida.
     const knownEdges = state.ruleset==='fog' ? botKnownEdges(idx) : state.blockedEdges;
     const oppIdx = otherPlayerClosestToCenter(idx, knownEdges);
-    if(bot.wallsLeft>0&&oppIdx!=null){
+    if(bot.wallsLeft>=mirrorWallCost()&&oppIdx!=null){
       const myDist=state.teams ? teamEta(teamOf(idx)) : distanceToCenter(bot.r,bot.c,knownEdges),oppDist=distanceToCenter(state.players[oppIdx].r,state.players[oppIdx].c,knownEdges);
       if(oppDist<=myDist+1&&Math.random()<profile.wallChance){ const w=findBestBlockingWall(oppIdx,oppDist,null,knownEdges,idx); if(w)return {type:'wall',r:w.r,c:w.c,orientation:w.orientation}; }
     }
     const moves=state.validMoves; if(!moves.length)return {type:'move',r:bot.r,c:bot.c};
+    if(state.ruleset==='party'){ const detour = botPartyTokenMove(idx, moves); if(detour) return {type:'move',r:detour.r,c:detour.c}; }
     const scored=moves.map(m=>({m,score:scoreBotMove(idx,m,profile.personality,knownEdges)})).sort((a,b)=>b.score-a.score);
     const choice=Math.random()<profile.randomness?scored[Math.floor(Math.random()*Math.min(3,scored.length))]:scored[0];
     return {type:'move',r:choice.m.r,c:choice.m.c};
@@ -2636,10 +2798,18 @@
       if(!cpNow || !cpNow.isCPU) return;
       // reloj de ajedrez: el tiempo de "pensar" simulado se descuenta del banco de la IA (si llega a 0, pierde)
       if(state.clockMode==='chess' && !chargeBotThinkTime(idxNow, thinkMs)) return;
-      const decision = botPlanMove(idxNow);
-      if(decision.type==='move') performMove(decision.r, decision.c);
-      else commitWall(decision.r, decision.c, decision.orientation);
+      botAct(idxNow);
     }, thinkMs);
+  }
+  // Una acción completa de la IA. Aparte del temporizador para poder ejercitarla en las pruebas.
+  function botAct(idxNow){
+    if(state.ruleset==='party'){
+      const forced = botPartyPowers(idxNow);        // puede gastar un poder "gratis" o decidir un Paso doble
+      if(forced){ performMove(forced.r, forced.c); return; }
+    }
+    const decision = botPlanMove(idxNow);
+    if(decision.type==='move') performMove(decision.r, decision.c);
+    else commitWall(decision.r, decision.c, decision.orientation);
   }
   function chargeBotThinkTime(idx, ms){
     state.clock[idx] = Math.max(0, state.clock[idx] - ms/1000);
@@ -2715,37 +2885,427 @@
     vibrate([0,40,60,40,140]);
     showWinOverlay(p, winnerTeam);
   }
+  // ---------- Fiesta: poderes ----------
+  // Los eventos (conseguir, activar, terminar, desvanecerse) se juntan y salen en UN solo aviso por jugada;
+  // los últimos también quedan escritos bajo los botones de poderes.
+  function partyEvent(html){
+    if(!state || !state.party) return;
+    state.party.pending.push(html);
+    state.party.recent.push(html);
+    if(state.party.recent.length>3) state.party.recent.shift();
+  }
+  function partyFlush(){
+    if(!state || !state.party || !state.party.pending.length) return;
+    const lines = state.party.pending.splice(0);
+    showToast('<span>' + lines.join('<br>') + '</span>');
+  }
+  function partyDist(i, edges){
+    const pl = state.players[i];
+    return distanceToCenter(pl.r, pl.c, edges || state.blockedEdges);
+  }
+  function partyStunnable(i){
+    const pl = state.players[i];
+    return !pl.stunned && !(pl.fx.immune>0) && !(pl.fx.shield>0);
+  }
+  // A quién aturdiría `idx`: el rival mejor ubicado que se pueda aturdir y que no esté a más de PARTY_STUN_MAX_LEAD pasos detrás.
+  // (Así el que va ganando no puede usarlo para hundir a quien viene lejos: el poder es para frenar al que te alcanza.)
+  function partyStunTarget(idx){
+    const me = partyDist(idx);
+    let best = null, bd = Infinity;
+    state.players.forEach((pl,i)=>{
+      if(i===idx || !partyStunnable(i)) return;
+      const d = partyDist(i);
+      if(!isFinite(d) || d > me + PARTY_STUN_MAX_LEAD) return;
+      if(d<bd){ bd = d; best = i; }
+    });
+    return best;
+  }
+  // Pared rival que más le acorta el camino a `idx`. Sólo cuenta si a él le ayuda más que a cualquier rival.
+  function partyBreakChoice(idx){
+    const edges = state.blockedEdges;
+    const myBase = partyDist(idx, edges);
+    const rivals = state.players.map((_,i)=> i).filter(i=> i!==idx);
+    const rivalBase = rivals.map(i=> partyDist(i, edges));
+    let best = null;
+    state.walls.forEach((w,wi)=>{
+      if(w.env || w.owner==null || w.owner===idx) return;
+      const test = new Set(edges);
+      wallEdges(w.r,w.c,w.orientation).forEach(e=> test.delete(edgeKey(e[0],e[1],e[2],e[3])));
+      const mine = myBase - partyDist(idx, test);
+      if(!(mine>=1)) return;
+      const theirs = Math.max(0, ...rivals.map((i,k)=> rivalBase[k] - partyDist(i, test)));
+      if(!(mine>theirs)) return;
+      const net = mine - theirs;
+      if(!best || net>best.net || (net===best.net && mine>best.gain)) best = { wallIndex:wi, gain:mine, net };
+    });
+    return best;
+  }
+  function partyBreakWall(wi){
+    const w = state.walls.splice(wi,1)[0];
+    state.occupied[w.r][w.c] = null;
+    wallEdges(w.r,w.c,w.orientation).forEach(e=> state.blockedEdges.delete(edgeKey(e[0],e[1],e[2],e[3])));
+    return w;
+  }
+  // ¿Puede `p` llevarse este poder? (guardados: máximo PARTY_MAX_HELD y sin repetidos; Pared extra: tope por partida)
+  function partyCanTake(p, type){
+    const def = PARTY_POWERS[type];
+    if(def.kind==='instant'){
+      if(type==='pared_extra' && (p.wallBonus||0) >= PARTY_WALL_BONUS_MAX) return { ok:false, reason:`ya sumó el máximo de paredes extra (+${PARTY_WALL_BONUS_MAX})` };
+      return { ok:true };
+    }
+    if(p.powers.indexOf(type)>=0) return { ok:false, reason:`ya tiene ${def.name} guardado` };
+    if(p.powers.length>=PARTY_MAX_HELD) return { ok:false, reason:`ya lleva ${PARTY_MAX_HELD} poderes guardados` };
+    return { ok:true };
+  }
   function maybePickUpPower(p){
     if(state.ruleset!=='party' || !state.powerUp) return false;
-    if(p.r!==state.powerUp.r || p.c!==state.powerUp.c) return false;
-    const type = state.powerUp.type;
-    state.powerUp = null;
-    if(type==='pared_extra'){
-      p.wallsLeft += 1;
-    } else if(type==='turno_extra'){
-      state.skipAdvance = true;
-    } else if(type==='aturdido'){
-      const targetIdx = otherPlayerClosestToCenter(state.currentPlayerIndex);
-      if(targetIdx!=null){ state.players[targetIdx].stunned = true; recordPartyStun(); }
+    const t = state.powerUp;
+    if(p.r!==t.r || p.c!==t.c) return false;
+    const def = PARTY_POWERS[t.type], can = partyCanTake(p, t.type), who = escapeHtml(p.name);
+    if(!can.ok){
+      partyEvent(`${def.emoji} ${who} pisó ${def.name}, pero ${can.reason}. El poder queda en el tablero.`);
+      return false;
     }
+    if(def.kind==='instant'){
+      p.wallsLeft += 1; p.wallsStart += 1; p.wallBonus = (p.wallBonus||0) + 1;
+      partyEvent(`${def.emoji} ${who} consiguió ${def.name}: +1 pared (le quedan ${p.wallsLeft}).`);
+    } else {
+      p.powers.push(t.type);
+      partyEvent(`${def.emoji} ${who} guardó ${def.name}. Duración: ${def.duration}.`);
+    }
+    state.party.stats.picked[t.type] = (state.party.stats.picked[t.type]||0) + 1;
+    state.powerUp = null;
+    state.party.nextSpawn = state.party.round + PARTY_RESPAWN_MIN + Math.floor(Math.random()*2);
     return true;
   }
-  function maybeSpawnPower(){
-    if(state.ruleset!=='party') return;
-    if(state.powerUp) return;
-    if(state.currentPlayerIndex!==0) return;
-    if(Math.random()>0.45) return;
-    const occupiedCells = new Set(state.players.map(p=> p.r+','+p.c));
-    occupiedCells.add(state.center.r+','+state.center.c);
-    let tries=0;
-    while(tries<40){
-      tries++;
-      const r = Math.floor(Math.random()*state.size);
-      const c = Math.floor(Math.random()*state.size);
-      if(occupiedCells.has(r+','+c)) continue;
-      state.powerUp = { r, c, type: PARTY_TYPES[Math.floor(Math.random()*PARTY_TYPES.length)] };
-      return;
+
+  // Distancias (en pasos, respetando paredes) desde una casilla a todo el tablero.
+  function partyDistMap(r0, c0){
+    const size = state.size, d = Array.from({length:size}, ()=> Array(size).fill(Infinity));
+    d[r0][c0] = 0;
+    const q = [[r0,c0]];
+    for(let h=0; h<q.length; h++){
+      const [r,c] = q[h];
+      for(const [dr,dc] of DIRS4){
+        const nr=r+dr, nc=c+dc;
+        if(nr<0||nc<0||nr>=size||nc>=size || d[nr][nc]!==Infinity || isBlocked(r,c,nr,nc,state.blockedEdges)) continue;
+        d[nr][nc] = d[r][c] + 1;
+        q.push([nr,nc]);
+      }
     }
+    return d;
+  }
+  // Casilla "justa" para un poder nuevo. Se mide el tiempo de llegada de cada ficha (a igual distancia llega antes quien juega antes)
+  // y se busca que sean parecidos; si no se puede, es preferible que el poder quede más cerca de quien va atrás que de quien va
+  // adelante, nunca al revés (la ventaja del líder pesa el triple). Nunca pegada a una ficha ni al centro, y a lo sumo a
+  // PARTY_SPAWN_MAX_DIST pasos de la ficha más cercana para que se pueda disputar antes de que se desvanezca.
+  function partyPickSpawnCell(maxDist){
+    maxDist = maxDist || PARTY_SPAWN_MAX_DIST;
+    const n = state.players.length, cur = state.currentPlayerIndex;
+    const maps = state.players.map(pl=> partyDistMap(pl.r, pl.c));
+    const toCenter = state.players.map((_,i)=> partyDist(i));
+    const bestCenter = Math.min(...toCenter);
+    const isLeader = toCenter.map(d=> d===bestCenter);
+    const hasOthers = isLeader.some(x=> !x);
+    const cands = [];
+    for(let r=0;r<state.size;r++) for(let c=0;c<state.size;c++){
+      if(Math.abs(r-state.center.r)+Math.abs(c-state.center.c) < 2) continue;
+      if(state.players.some(pl=> pl.r===r && pl.c===c)) continue;
+      let minD = Infinity, minT = Infinity, maxT = -Infinity, nearest = 0, tLead = Infinity, tOth = Infinity, ok = true;
+      for(let i=0;i<n;i++){
+        const d = maps[i][r][c];
+        if(!isFinite(d)){ ok = false; break; }
+        const t = d*n + ((i-cur+n)%n);
+        if(d<minD) minD = d;
+        if(t<minT){ minT = t; nearest = i; }
+        if(t>maxT) maxT = t;
+        if(isLeader[i]){ if(t<tLead) tLead = t; } else if(t<tOth) tOth = t;
+      }
+      if(!ok || minD<2 || minD>maxDist) continue;
+      const leadHead = hasOthers ? Math.max(0, tOth - tLead) : 0;      // cuánto antes llega el líder que el resto
+      cands.push({ r, c, spread:maxT-minT, leadHead, score:(maxT-minT) + 3*leadHead, nearest });
+    }
+    if(!cands.length) return null;
+    const best = Math.min(...cands.map(x=> x.score));
+    const pool = cands.filter(x=> x.score<=best+1);
+    return pool[Math.floor(Math.random()*pool.length)];
+  }
+  // Prueba con el alcance normal y, si el líder quedaría con ventaja de más de un paso, con un poco más de alcance.
+  // Si aun así no hay una casilla pareja, el poder espera a la ronda siguiente (a la tercera espera se tolera hasta 2 pasos de ventaja).
+  // Nunca se lo regala al que va adelante: si las posiciones no lo permiten, simplemente no aparece todavía.
+  function partyChooseSpawnCell(){
+    const n = state.players.length, P = state.party;
+    let cell = partyPickSpawnCell(PARTY_SPAWN_MAX_DIST);
+    if(!cell || cell.leadHead>n) cell = partyPickSpawnCell(PARTY_SPAWN_MAX_DIST+2) || cell;
+    const limit = P.spawnMisses>=2 ? 2*n : n;
+    if(!cell || cell.leadHead>limit){ P.spawnMisses += 1; return null; }
+    P.spawnMisses = 0;
+    return cell;
+  }
+  // Qué poder sale: al azar con pesos. Si quien más cerca queda es quien va ganando, los poderes de remontada valen la mitad;
+  // si es quien va último, el doble. Nunca sale algo que ese jugador no podría llevarse.
+  function partyPickType(nearestIdx){
+    const dists = state.players.map((_,i)=> partyDist(i));
+    const best = Math.min(...dists), worst = Math.max(...dists), me = dists[nearestIdx];
+    const isLeader = best<worst && me===best, isLast = best<worst && me===worst;
+    const pool = [];
+    let total = 0;
+    PARTY_TYPES.forEach(k=>{
+      const def = PARTY_POWERS[k];
+      if(!partyCanTake(state.players[nearestIdx], k).ok) return;
+      let w = def.weight;
+      if(def.catchUp){ if(isLeader) w *= 0.5; else if(isLast) w *= 2; }
+      pool.push({ k, w });
+      total += w;
+    });
+    if(!pool.length) return 'escudo';
+    let roll = Math.random()*total;
+    for(const x of pool){ roll -= x.w; if(roll<=0) return x.k; }
+    return pool[pool.length-1].k;
+  }
+  function partySpawn(){
+    if(!state.party || state.powerUp) return false;
+    const cell = partyChooseSpawnCell();
+    if(!cell) return false;
+    const type = partyPickType(cell.nearest), def = PARTY_POWERS[type];
+    state.powerUp = { r:cell.r, c:cell.c, type, ttl:PARTY_TOKEN_TTL };
+    state.party.stats.spawned += 1;
+    partyEvent(`✨ Apareció ${def.emoji} ${def.name} en el tablero. Dura ${PARTY_TOKEN_TTL} rondas.`);
+    return true;
+  }
+  // Empieza una ronda nueva (volvió a jugar quien abre): el poder del tablero envejece y, si toca, aparece otro.
+  function partyNewRound(){
+    const P = state.party;
+    P.round += 1;
+    if(state.powerUp){
+      state.powerUp.ttl -= 1;
+      if(state.powerUp.ttl<=0){
+        const def = PARTY_POWERS[state.powerUp.type];
+        partyEvent(`💨 ${def.emoji} ${def.name} se desvaneció del tablero.`);
+        state.powerUp = null;
+        P.stats.vanished += 1;
+        P.nextSpawn = P.round + PARTY_RESPAWN_MIN + Math.floor(Math.random()*2);
+      }
+    }
+    if(!state.powerUp && P.round>=P.nextSpawn) partySpawn();
+  }
+  function partyOnTurnStart(next, prevIndex){
+    const P = state.party;
+    if(!P) return;
+    if(next<=prevIndex) partyNewRound();
+    P.usedThisTurn = false;
+    const p = state.players[next];
+    if(p.fx.shield>0){
+      p.fx.shield -= 1;
+      if(p.fx.shield===0) partyEvent(`🛡️ Terminó el escudo de ${escapeHtml(p.name)}.`);
+    }
+    if(p.fx.immune>0) p.fx.immune -= 1;
+    p.fx.extra = 0;
+  }
+  function partyStunSkipped(p){
+    if(!state.party) return;
+    p.fx.immune = PARTY_STUN_IMMUNE_TURNS;
+    partyEvent(`💫 ${escapeHtml(p.name)} está aturdido y pierde este turno. Los próximos ${PARTY_STUN_IMMUNE_TURNS} no se lo puede volver a aturdir.`);
+  }
+
+  // ¿Puede `idx` usar `key` ahora? (siempre en su turno, un poder por turno)
+  function partyCanUse(idx, key){
+    const P = state && state.party;
+    if(!P || state.winner || idx!==state.currentPlayerIndex) return { ok:false, reason:'no es tu turno' };
+    const p = state.players[idx];
+    if(p.powers.indexOf(key)<0) return { ok:false, reason:'no lo tenés guardado' };
+    if(key==='paso_doble' && state.sprintArmed) return { ok:true };          // ya armado: el botón lo cancela
+    if(P.usedThisTurn) return { ok:false, reason:'ya usaste un poder en este turno' };
+    switch(key){
+      case 'paso_doble':   return state.validMoves.some(m=> m.sprint) ? { ok:true } : { ok:false, reason:'no hay dos casillas libres en línea recta' };
+      case 'turno_extra':  return p.fx.extra ? { ok:false, reason:'ya está activo' } : { ok:true };
+      case 'aturdido':     return partyStunTarget(idx)!=null ? { ok:true } : { ok:false, reason:'ningún rival cumple: van muy atrás, ya están aturdidos, inmunes o con escudo' };
+      case 'romper_pared': return partyBreakChoice(idx) ? { ok:true } : { ok:false, reason:'ninguna pared rival te estorba más de lo que ayuda a los demás' };
+      case 'escudo':       return p.fx.shield>0 ? { ok:false, reason:'ya tenés escudo' } : { ok:true };
+    }
+    return { ok:false, reason:'poder desconocido' };
+  }
+  // Usa el poder. Paso doble sólo se arma/desarma (se gasta al hacer el paso). Devuelve true si algo cambió.
+  function partyUse(idx, key){
+    if(!partyCanUse(idx, key).ok) return false;
+    const p = state.players[idx], P = state.party, who = escapeHtml(p.name);
+    if(key==='paso_doble'){ state.sprintArmed = !state.sprintArmed; return true; }
+    p.powers.splice(p.powers.indexOf(key), 1);
+    P.usedThisTurn = true;
+    P.stats.used[key] = (P.stats.used[key]||0) + 1;
+    if(key==='turno_extra'){
+      p.fx.extra = 1;
+      partyEvent(`⏩ ${who} activó Turno extra: juega dos acciones seguidas.`);
+    } else if(key==='aturdido'){
+      const target = state.players[partyStunTarget(idx)];
+      target.stunned = true;
+      if(!p.isCPU) recordPartyStun();
+      partyEvent(`💫 ${who} aturdió a ${escapeHtml(target.name)}: pierde su próximo turno.`);
+    } else if(key==='romper_pared'){
+      const choice = partyBreakChoice(idx), w = partyBreakWall(choice.wallIndex);
+      partyEvent(`🔨 ${who} rompió una pared de ${escapeHtml(state.players[w.owner].name)} y se ahorra ${choice.gain} paso${choice.gain===1?'':'s'}.`);
+    } else if(key==='escudo'){
+      p.fx.shield = PARTY_SHIELD_ROUNDS;
+      partyEvent(`🛡️ ${who} activó Escudo: nadie puede aturdirlo durante ${PARTY_SHIELD_ROUNDS} rondas.`);
+    }
+    state.sprintArmed = false;
+    state.validMoves = computeValidMoves(idx);
+    return true;
+  }
+  function partySpendSprint(p){
+    const i = p.powers.indexOf('paso_doble');
+    if(i<0 || !state.party) return;
+    p.powers.splice(i, 1);
+    state.party.usedThisTurn = true;
+    state.party.stats.used.paso_doble = (state.party.stats.used.paso_doble||0) + 1;
+    partyEvent(`👟 ${escapeHtml(p.name)} usó Paso doble.`);
+  }
+  // Turno extra: la primera acción no termina el turno; la segunda sí. Devuelve true si el turno sigue.
+  function partyKeepTurn(p){
+    if(state.ruleset!=='party' || !state.party || !p.fx) return false;
+    if(p.fx.extra===1){
+      const idx = state.players.indexOf(p);
+      if(p.wallsLeft>0 || computeValidMoves(idx).length>0){
+        p.fx.extra = 2;
+        partyEvent(`⏩ ${escapeHtml(p.name)} juega su acción extra.`);
+        return true;
+      }
+      p.fx.extra = 0;
+      return false;
+    }
+    if(p.fx.extra===2){
+      p.fx.extra = 0;
+      partyEvent(`⏩ Terminó el turno extra de ${escapeHtml(p.name)}.`);
+    }
+    return false;
+  }
+  // Redibuja tras usar un poder sin regalarle tiempo al reloj de turno (render() lo reinicia).
+  function partyRerender(){
+    syncTurnTimeLeft();
+    const left = state.turnTimeLeft;
+    render();
+    if(left>0 && activeClockKind()==='turn'){ state.turnTimeLeft = left; startTurnTimer(true); }
+  }
+
+  // Fichas de estado en la lista de jugadores (poderes guardados y efectos activos)
+  function partyTagsHTML(p){
+    if(!p.fx) return '';
+    let h = '';
+    p.powers.forEach(k=>{
+      const d = PARTY_POWERS[k];
+      h += `<span class="cpu-tag power-tag" title="${escapeHtml(d.name+': '+d.desc+' Duración: '+d.duration+'.')}">${d.emoji}</span>`;
+    });
+    if(p.fx.shield>0) h += `<span class="cpu-tag power-tag on" title="Escudo: nadie puede aturdirlo (rondas que le quedan)">🛡️ ${p.fx.shield}</span>`;
+    if(p.fx.extra>0) h += `<span class="cpu-tag power-tag on" title="Turno extra activo">⏩ ${p.fx.extra===1 ? '+1 acción' : 'última acción'}</span>`;
+    if(p.fx.immune>0 && !p.stunned) h += `<span class="cpu-tag power-tag" title="No se lo puede aturdir (turnos que le quedan)">💫✖ ${p.fx.immune}</span>`;
+    if(p.wallBonus>0) h += `<span class="cpu-tag power-tag" title="Paredes extra recibidas">🧱+${p.wallBonus}</span>`;
+    return h;
+  }
+  // Barra de poderes bajo los botones de modo: los del jugador que tiene el turno (si es una persona) y el aviso del tablero.
+  function updatePowerBar(){
+    if(!powerBar) return;
+    const on = !!state && state.ruleset==='party' && !!state.party && !state.winner;
+    powerBar.classList.toggle('hidden', !on);
+    if(!on) return;
+    const idx = state.currentPlayerIndex, p = state.players[idx];
+    let html = '';
+    if(p && !p.isCPU){
+      p.powers.forEach(key=>{
+        const def = PARTY_POWERS[key], chk = partyCanUse(idx, key);
+        const armed = key==='paso_doble' && !!state.sprintArmed;
+        const tip = def.name+': '+def.desc+' Duración: '+def.duration+'.'+(chk.ok ? '' : ' Ahora no se puede: '+chk.reason+'.');
+        html += `<button type="button" class="kbtn small mode-btn power-btn${armed?' active':''}" data-power="${key}"${chk.ok?'':' disabled'} title="${escapeHtml(tip)}" aria-label="${escapeHtml(tip)}"><img class="btn-ico" src="${emoteIconSrc(def.icon)}" alt=""> ${def.name}</button>`;
+      });
+    }
+    if(!html){
+      const held = p && p.powers.length ? p.powers.map(k=> PARTY_POWERS[k].emoji+' '+PARTY_POWERS[k].name).join(', ') : 'ninguno';
+      html = `<span class="power-empty">${p && p.isCPU ? escapeHtml(p.name)+' guarda: '+held+'.' : 'No tenés poderes guardados.'}</span>`;
+    }
+    powerBtns.innerHTML = html;
+    const lines = [];
+    if(state.powerUp){
+      const d = PARTY_POWERS[state.powerUp.type], t = state.powerUp.ttl;
+      lines.push(`✨ En el tablero: ${d.emoji} ${d.name} (${d.kind==='instant' ? 'se aplica al instante' : 'se guarda'}). Se desvanece en ${t} ronda${t===1?'':'s'}.`);
+    } else {
+      lines.push('✨ Ahora no hay ningún poder en el tablero.');
+    }
+    state.party.recent.slice(-2).forEach(l=> lines.push(l));
+    powerNote.innerHTML = lines.map(l=> `<span>${l}</span>`).join('');
+  }
+  // Ayuda desplegable: qué hace cada poder y cuánto dura
+  if(powerHelpList){
+    powerHelpList.innerHTML = PARTY_TYPES.map(k=>{
+      const d = PARTY_POWERS[k];
+      return `<li><b>${d.emoji} ${d.name}</b> <em>${d.kind==='instant' ? 'instantáneo' : 'se guarda'} · dura: ${d.duration}</em><br>${escapeHtml(d.desc)}</li>`;
+    }).join('');
+  }
+
+  // IA de Fiesta. Gasta un poder cuando de verdad le conviene (sin gastar nada si puede ganar ya) y, en tal caso, sigue con su jugada.
+  // Devuelve una jugada sólo cuando la decisión ES un Paso doble; en los demás casos devuelve null y la jugada la elige botPlanMove.
+  function botPartyPowers(idx){
+    const bot = state.players[idx], P = state.party;
+    if(!P || state.winner || P.usedThisTurn || !bot.powers.length) return null;
+    const edges = state.blockedEdges;
+    if(state.validMoves.some(m=> !m.sprint && distanceToCenter(m.r,m.c,edges)===0)) return null;   // puede ganar: no gasta nada
+    const luck = PARTY_BOT_USE[bot.difficulty||'easy'] || 0.5;
+    const has = k=> bot.powers.indexOf(k)>=0;
+    const dMe = partyDist(idx);
+    const oppIdx = otherPlayerClosestToCenter(idx, edges);
+    const dOpp = oppIdx!=null ? partyDist(oppIdx) : Infinity;
+    // 1) Aturdir: cuando el rival me alcanza o está por ganar
+    if(has('aturdido') && Math.random()<luck){
+      const t = partyStunTarget(idx);
+      if(t!=null){
+        const dT = partyDist(t);
+        if(((dT<=dMe && dT<=5) || dT<=2) && partyUse(idx,'aturdido')) return null;
+      }
+    }
+    // 2) Romper pared: si me ahorra camino de verdad (la IA más floja exige más)
+    if(has('romper_pared') && Math.random()<luck){
+      const c = partyBreakChoice(idx);
+      if(c && c.gain >= ((bot.difficulty||'easy')==='easy' ? 2 : 1) && partyUse(idx,'romper_pared')) return null;
+    }
+    // 3) Escudo: sólo si algún rival guarda un Aturdir
+    if(has('escudo') && bot.fx.shield===0 && Math.random()<luck && state.players.some((pl,i)=> i!==idx && pl.powers.indexOf('aturdido')>=0)){
+      if(partyUse(idx,'escudo')) return null;
+    }
+    // 4) Turno extra: en la recta final o cuando la carrera está pareja
+    if(has('turno_extra') && Math.random()<luck && (dMe<=3 || dOpp<=dMe)){
+      if(partyUse(idx,'turno_extra')) return null;
+    }
+    // 5) Paso doble: sólo si el salto queda mejor que cualquier paso normal
+    if(has('paso_doble') && Math.random()<luck){
+      const sp = state.validMoves.filter(m=> m.sprint);
+      const normal = state.validMoves.filter(m=> !m.sprint && !m.push && !m.swap);
+      if(sp.length && normal.length){
+        const pick = list=> list.map(m=> ({ m, d:distanceToCenter(m.r,m.c,edges) })).sort((a,b)=> a.d-b.d)[0];
+        const bs = pick(sp), bn = pick(normal);
+        if(bs.d < bn.d) return { type:'move', r:bs.m.r, c:bs.m.c };
+      }
+    }
+    return null;
+  }
+  // La IA agarra un poder si le queda "de paso" (el desvío no pasa de su margen) y todavía puede llevárselo.
+  function botPartyTokenMove(idx, moves){
+    const t = state.powerUp;
+    if(!t || !state.party) return null;
+    const bot = state.players[idx];
+    if(!partyCanTake(bot, t.type).ok) return null;
+    const edges = state.blockedEdges;
+    const dMe = partyDist(idx);
+    if(dMe<=2) return null;                                   // cerca de ganar: nada de desvíos
+    const b = PARTY_BOT_DETOUR[bot.difficulty||'easy'], budget = b===undefined ? 0 : b;
+    const dTok = bfsShortestPath(bot.r, bot.c, t.r, t.c, edges, state.size);
+    if(!isFinite(dTok)) return null;
+    if(dTok + distanceToCenter(t.r,t.c,edges) > dMe + budget) return null;
+    let best = null, bd = Infinity, bc = Infinity;
+    moves.forEach(m=>{
+      if(m.sprint || m.push || m.swap) return;
+      const d = bfsShortestPath(m.r, m.c, t.r, t.c, edges, state.size);
+      const dc = distanceToCenter(m.r, m.c, edges);
+      if(d<bd || (d===bd && dc<bc)){ best = m; bd = d; bc = dc; }
+    });
+    return (best && bd<dTok) ? best : null;
   }
 
   function performMove(r,c){
@@ -2784,6 +3344,7 @@
       }
       dropTrail(p.r, p.c);
     }
+    if(state.ruleset==='party' && chosen && chosen.sprint) partySpendSprint(p);
     p.r = r; p.c = c;
     state.moveCount = (state.moveCount||0) + 1;
     maybePickUpPower(p);
@@ -2809,14 +3370,14 @@
     }
     if(pushTo){ playWallSound(); vibrate(25); }   // el empujón suena como una pared, con un golpe más largo
     else { playMoveSound(); vibrate(12); }
-    if(state.skipAdvance){
-      state.skipAdvance = false;
+    if(partyKeepTurn(p)){                          // Fiesta: Turno extra, la jugada no termina el turno
+      state.sprintArmed = false;
       state.validMoves = computeValidMoves(idx);
+      mode = 'move';
       render(idx);
       return;
     }
     advanceTurn();
-    maybeSpawnPower();
     checkHunterTimeout();
     render(idx);
   }
@@ -2841,12 +3402,13 @@
     const gapBefore = cpuOpp ? distanceToCenter(cpuOpp.r, cpuOpp.c, state.blockedEdges) - distanceToCenter(cp.r, cp.c, state.blockedEdges) : 0;
     state.occupied[r][c] = orientation;
     evalRes.edges.forEach(e=> state.blockedEdges.add(edgeKey(e[0],e[1],e[2],e[3])));
-    state.walls.push({ r, c, orientation, color: cp.color });
-    if(evalRes.mirrorEdges){
-      const m = mirrorSlot(r,c);
-      state.occupied[m.r][m.c] = orientation;
-      evalRes.mirrorEdges.forEach(e=> state.blockedEdges.add(edgeKey(e[0],e[1],e[2],e[3])));
-      state.walls.push({ r:m.r, c:m.c, orientation, color: cp.color });
+    state.walls.push({ r, c, orientation, color: cp.color, owner: state.currentPlayerIndex });
+    if(evalRes.mirrorCopies){
+      evalRes.mirrorCopies.forEach(mc=>{
+        state.occupied[mc.r][mc.c] = mc.orientation;
+        mc.edges.forEach(e=> state.blockedEdges.add(edgeKey(e[0],e[1],e[2],e[3])));
+        state.walls.push({ r:mc.r, c:mc.c, orientation:mc.orientation, color: cp.color, mirrorOf:{r,c,orientation} });
+      });
     }
     if(cpuOpp){
       // si la pared del humano le sacó 3 o más de ventaja a la IA, la IA se enoja (con enfriamiento largo)
@@ -2860,7 +3422,7 @@
       state.teams[teamOf(cp.id)].wallsLeft -= 1;   // reserva compartida: la pared la paga el equipo
       syncTeamWalls();
     } else {
-      cp.wallsLeft -= 1;
+      cp.wallsLeft -= mirrorWallCost();
     }
     if(state.ruleset==='hunter' && state.currentPlayerIndex===state.fugitiveIdx) ageTrail();   // poner pared también es un turno del fugitivo
     if(state.lastPush) state.lastPush[state.currentPlayerIndex] = null;
@@ -2874,8 +3436,14 @@
       return true;
     }
     settleClock(state.currentPlayerIndex);        // reloj de ajedrez: descuenta lo gastado y suma el incremento
+    if(partyKeepTurn(cp)){                        // Fiesta: Turno extra, la pared no termina el turno
+      state.sprintArmed = false;
+      state.validMoves = computeValidMoves(state.currentPlayerIndex);
+      mode = 'move';
+      render();
+      return true;
+    }
     advanceTurn();
-    maybeSpawnPower();
     checkHunterTimeout();
     render();
     return true;
@@ -3232,9 +3800,14 @@
     }
     if(state.ruleset==='party' && state.powerUp){
       const pc=(state.powerUp.c+0.5)*cs, pr=(state.powerUp.r+0.5)*cs;
-      const icon = state.powerUp.type==='pared_extra' ? 'bars' : (state.powerUp.type==='turno_extra' ? 'star' : 'alert');
-      const isz = cs*0.5;
-      wallsHTML += `<g class="power-token"><circle cx="${pc}" cy="${pr}" r="${cs*0.32}" fill="var(--accent)" opacity="0.25" class="spin"/><image href="${emoteIconSrc(icon)}" x="${pc-isz/2}" y="${pr-isz/2}" width="${isz}" height="${isz}"/></g>`;
+      const pdef = PARTY_POWERS[state.powerUp.type];
+      const isz = cs*0.5, ttl = state.powerUp.ttl;
+      const badgeR = cs*0.17;
+      wallsHTML += `<g class="power-token${ttl<=1 ? ' fading' : ''}"><title>${escapeHtml(pdef.name+': '+pdef.desc+' Se desvanece en '+ttl+(ttl===1?' ronda.':' rondas.'))}</title>`
+        + `<circle cx="${pc}" cy="${pr}" r="${cs*0.32}" fill="var(--accent)" opacity="0.25" class="spin"/>`
+        + `<image href="${emoteIconSrc(pdef.icon)}" x="${pc-isz/2}" y="${pr-isz/2}" width="${isz}" height="${isz}"/>`
+        + `<circle cx="${pc+cs*0.3}" cy="${pr+cs*0.3}" r="${badgeR}" fill="var(--ink)" stroke="var(--panel)" stroke-width="1.5"/>`
+        + `<text x="${pc+cs*0.3}" y="${pr+cs*0.3}" text-anchor="middle" dominant-baseline="central" font-size="${cs*0.22}" font-weight="700" fill="var(--panel)">${ttl}</text></g>`;
     }
     wallsEl.innerHTML = wallsHTML;
 
@@ -3288,6 +3861,13 @@
         const sz = cs*0.46;
         g += `<image href="${emoteIconSrc('swirl')}" x="${cx-sz/2}" y="${cy-size*0.95-sz/2}" width="${sz}" height="${sz}" pointer-events="none"/>`;
       }
+      if(state.ruleset==='party' && p.fx){
+        if(p.fx.shield>0) g += `<circle cx="${cx}" cy="${cy}" r="${size*0.9}" fill="none" stroke="#4da3ff" stroke-width="2.5" stroke-dasharray="5 4" class="shield-ring" pointer-events="none"/>`;
+        if(p.fx.extra>0){
+          const sz2 = cs*0.4;
+          g += `<image href="${emoteIconSrc('star')}" x="${cx+size*0.35}" y="${cy-size*0.95-sz2/2}" width="${sz2}" height="${sz2}" pointer-events="none"/>`;
+        }
+      }
       if(anim && (i===anim.pusher || i===anim.pushed)){
         const from = (i===anim.pusher) ? anim.pusherFrom : anim.pushedFrom;
         const dx = (from.c - p.c) * cs, dy = (from.r - p.r) * cs;
@@ -3301,6 +3881,7 @@
 
     updateHeader();
     updateSidePanel();
+    partyFlush();
     updateModeUI();
     scheduleBotTurnIfNeeded();
     startTurnTimer();
@@ -3384,6 +3965,11 @@
       const teamTag = team ? `<span class="cpu-tag team-tag team-${team}"><i class="team-dot"></i>Equipo ${team}</span>` : '';
       const arrivedTag = p.arrived ? '<span class="cpu-tag">🏁 llegó</span>' : '';
       const stunTag = p.stunned ? `<span class="cpu-tag"><img src="${emoteIconSrc('swirl')}" alt="">aturdido</span>` : '';
+      const partyTag = state.ruleset==='party' ? partyTagsHTML(p) : '';
+      const mirrorTag = state.ruleset==='mirror'
+        ? (i===state.mirrorOpenerIdx ? '<span class="cpu-tag mirror-tag" title="Abrió la partida">🪞 abre</span>'
+            : ((p.wallBonus||0)>0 ? `<span class="cpu-tag mirror-tag" title="Compensación por abrir segundo">🧱+${p.wallBonus}</span>` : ''))
+        : '';
       const hillTag = (state.ruleset==='hill')
         ? `<span class="cpu-tag">⛰️ ${p.hillTurns||0}/${hillTargetTurns()}</span><span class="cpu-tag" title="Empujones que le quedan"><img src="${emoteIconSrc('anger')}" alt="Empujones">${p.pushesLeft||0}</span>`
         : '';
@@ -3400,7 +3986,7 @@
         `<button type="button" class="emote-btn ${(emoteCooldown[i]||0)>now?'cooldown':''}" data-pid="${i}" aria-label="Emotes de ${escapeHtml(p.name)}"><img src="${emoteIconSrc('faceHappy')}" alt=""></button>`;
       return `<li class="player-row ${active?'active':''}${chess?' has-clock':''}" style="--pc:${p.color}; --pc-bg:${bg}">
         <span class="row-icon">${smallShapeSVG(p.shape,p.color,22)}</span>
-        <span class="player-name">${escapeHtml(p.name)}${cpuTag}${teamTag}${arrivedTag}${stunTag}${hillTag}${hunterTag}</span>
+        <span class="player-name">${escapeHtml(p.name)}${cpuTag}${teamTag}${arrivedTag}${stunTag}${partyTag}${mirrorTag}${hillTag}${hunterTag}</span>
         <span class="wall-count">${p.wallsLeft} <span class="wall-label">${sharedWalls ? 'del equipo' : 'paredes'}</span></span>
         ${emoteBtn}
         ${clockLine}
@@ -3528,6 +4114,15 @@
     const teamGoal = (isTeams && options.teamGoal==='both') ? 'both' : 'first';
     const startTeam = isTeams ? ((options.startTeam==='A' || options.startTeam==='B') ? options.startTeam : (Math.random()<0.5 ? 'A' : 'B')) : 'A';
 
+    // Espejo (23/24): sorteo de quién abre + compensación de pared para quien abre segundo. Medido con 1000
+    // partidas/tamaño de IA experta (52.0% para quien abre, no llega al 58%) y un chequeo con IA normal (5×5
+    // sube a 63%), así que la compensación queda moderada en vez de en 0. Sólo para el 1v1 clásico del modo
+    // (con 4 jugadores el orden de turno es el habitual); tampoco aplica a niveles propios ni al desafío diario.
+    const mirrorBalance = ruleset==='mirror' && playersCount===2 && !options.isCustomLevel && !isDaily && !customPlayers;
+    const mirrorOpenerIdx = mirrorBalance
+      ? (window.__QUORIDOR_TEST__ && typeof window.__mirrorForceOpener==='number' ? window.__mirrorForceOpener : (Math.random()<0.5 ? 0 : 1))
+      : 0;
+
     const players = order.map((slotKey,i)=>{
       const skin = pieceSkins[i] || PALETTE[i];
       const isCPU = customPlayers ? !!customPlayers[i].isCPU : (isCpu && i===1);
@@ -3535,6 +4130,8 @@
       if(hunterPoolOn){
         walls = (i===fugitiveIdx) ? Math.max(1, Math.floor(wallsEach/2)) : hunterPool;
       }
+      const mirrorBonusHere = (mirrorBalance && i===(1-mirrorOpenerIdx)) ? MIRROR_CFG.secondBonus : 0;
+      walls += mirrorBonusHere;
       return {
         id: i,
         name: isCPU ? (options.campaignRival || (isTeams ? (i===2 ? 'IA aliada' : 'IA rival ' + (i===1 ? 1 : 2)) : 'CPU')) : ((names[i] && names[i].trim()) ? names[i].trim() : PALETTE[i].name),
@@ -3547,6 +4144,9 @@
         isCPU: isCPU,
         difficulty: customPlayers ? (customPlayers[i].difficulty||'easy') : difficulty,
         stunned: false,
+        powers: [],                                   // Fiesta: poderes guardados
+        fx: { shield:0, extra:0, immune:0 },          // Fiesta: efectos activos (rondas de escudo · acción extra · turnos sin poder ser aturdido)
+        wallBonus: mirrorBonusHere,                    // Fiesta: paredes extra ya recibidas · Espejo: compensación por abrir segundo
         hillTurns: 0,
         pushesLeft: ruleset==='hill' ? HILL_PUSHES : 0,
         sprints: (ruleset==='hunter' && i===fugitiveIdx) ? HUNTER_SPRINTS : 0,
@@ -3571,8 +4171,9 @@
       center: objective,
       objective,
       players,
-      currentPlayerIndex: startTeam==='B' ? 1 : 0,
+      currentPlayerIndex: startTeam==='B' ? 1 : (mirrorBalance ? mirrorOpenerIdx : 0),
       teams, teamGoal, startTeam,
+      mirrorOpenerIdx: ruleset==='mirror' ? mirrorOpenerIdx : null,
       occupied: Array.from({length:size-1}, ()=>Array(size-1).fill(null)),
       blockedEdges: new Set(),
       walls: [],
@@ -3583,8 +4184,8 @@
       isCpuGame: isCpu || !!(customPlayers && customPlayers.some(p=> p.isCPU)),
       ruleset,
       moveCount: 0,
-      powerUp: null,
-      skipAdvance: false,
+      powerUp: null,                                     // Fiesta: {r,c,type,ttl}
+      party: ruleset==='party' ? { round:1, nextSpawn:1, spawnMisses:0, usedThisTurn:false, pending:[], recent:[], stats:{ used:{}, picked:{}, spawned:0, vanished:0 } } : null,
       isDaily,
       dailyPar: null,
       hunterRoundLimit: ruleset==='hunter' ? size + HUNTER_ROUNDS_EXTRA : null,
@@ -3628,7 +4229,7 @@
     } else {
       recordModePlayed(ruleset);
     }
-    if(ruleset==='party') maybeSpawnPower();
+    if(ruleset==='party') partySpawn();
 
     state.validMoves = computeValidMoves(state.currentPlayerIndex);
     render();
@@ -3636,13 +4237,15 @@
       const extraTeam = startTeam==='A' ? 'B' : 'A';
       const extra = teams[extraTeam].extra;
       showToast(`🎲 Sorteo: abre el Equipo ${startTeam}.` + (extra>0 ? ` El Equipo ${extraTeam} recibe +${extra} pared${extra===1?'':'es'} de compensación.` : ''));
+    } else if(mirrorBalance){
+      runMirrorCoinToss(mirrorOpenerIdx, MIRROR_CFG.secondBonus);
     }
   }
 
   // ---------- input handling (Pointer Events: works identically for mouse, touch and stylus) ----------
   let previewSlot = null;
   let dragging = false;
-  let siegeHintOn = false;   // el aviso de "zona con menos de 2 accesos" está en pantalla
+  let wallReasonHintOn = false;   // hay un aviso puntual en pantalla (zona sitiada en Colina, reflejo inválido en Espejo)
 
   boardSvg.addEventListener('contextmenu', e=> e.preventDefault());
 
@@ -3676,7 +4279,7 @@
     }
     hideWallPreview();
     previewSlot = null;
-    if(siegeHintOn){ siegeHintOn = false; if(state && !state.winner) updateModeUI(); }
+    if(wallReasonHintOn){ wallReasonHintOn = false; if(state && !state.winner) updateModeUI(); }
   }
   boardSvg.addEventListener('pointerup', finishWallDrag);
   boardSvg.addEventListener('pointercancel', finishWallDrag);
@@ -3690,21 +4293,63 @@
     previewSlot = slot;
     if(evalRes.reason==='hillSiege'){
       hintLine.textContent = `No se puede cerrar la zona: tiene que quedar con al menos ${HILL_MIN_ACCESSES} accesos.`;
-      siegeHintOn = true;
-    } else if(siegeHintOn){ siegeHintOn = false; updateModeUI(); }
+      wallReasonHintOn = true;
+    } else if(evalRes.reason==='mirrorClash'){
+      hintLine.textContent = 'El reflejo choca con otra pared.';
+      wallReasonHintOn = true;
+    } else if(evalRes.reason==='mirrorBlocks'){
+      hintLine.textContent = `El reflejo le corta el camino a ${escapeHtml(evalRes.blockedPlayer.name)}.`;
+      wallReasonHintOn = true;
+    } else if(wallReasonHintOn){ wallReasonHintOn = false; updateModeUI(); }
     const rect = wallRect(slot.r, slot.c, slot.orientation, cs);
     const cp = state.players[state.currentPlayerIndex];
+    // Espejo (25): trama roja tanto en la pared original como en el/los reflejo(s) cuando la reflexión
+    // específicamente es lo que falla (choca o bloquea); un rechazo "de siempre" (p. ej. ranura ocupada) se
+    // ve igual que en cualquier otro modo, sin reflejo dibujado.
+    const badReflection = state.ruleset==='mirror' && !evalRes.valid && (evalRes.reason==='mirrorClash' || evalRes.reason==='mirrorBlocks');
     previewEl.setAttribute('x', rect.x);
     previewEl.setAttribute('y', rect.y);
     previewEl.setAttribute('width', rect.w);
     previewEl.setAttribute('height', rect.h);
     previewEl.setAttribute('rx', rect.h>rect.w ? rect.w*0.4 : rect.h*0.4);
-    previewEl.setAttribute('fill', evalRes.valid ? cp.color : '#c0392b');
-    previewEl.setAttribute('opacity', evalRes.valid ? '0.55' : '0.4');
+    previewEl.setAttribute('fill', badReflection ? 'url(#invalidHatch)' : (evalRes.valid ? cp.color : '#c0392b'));
+    previewEl.setAttribute('opacity', badReflection ? '0.6' : (evalRes.valid ? '0.55' : '0.4'));
+    if(state.ruleset==='mirror'){
+      updateMirrorPreview(slot, evalRes, rect, cs, cp, badReflection);
+    } else {
+      hideMirrorPreview();
+    }
+  }
+
+  // Espejo (25): dibuja, mientras se arrastra, la(s) copia(s) reflejada(s) al 50% de opacidad con el mismo
+  // color, unidas al original con una línea punteada; si el reflejo es inválido, ambas se pintan con trama roja.
+  function updateMirrorPreview(slot, evalRes, mainRect, cs, cp, badReflection){
+    const copies = (evalRes.valid && evalRes.mirrorCopies) ? evalRes.mirrorCopies
+      : (badReflection ? mirrorNeededCopies(slot.r, slot.c, slot.orientation) : []);
+    const mainCx = mainRect.x + mainRect.w/2, mainCy = mainRect.y + mainRect.h/2;
+    for(let k=0;k<3;k++){
+      const { rect: rEl, line: lEl } = mirrorPreviewEls[k];
+      const m = copies[k];
+      if(!m){ rEl.setAttribute('opacity','0'); lEl.setAttribute('opacity','0'); continue; }
+      const r = wallRect(m.r, m.c, m.orientation, cs);
+      rEl.setAttribute('x', r.x); rEl.setAttribute('y', r.y);
+      rEl.setAttribute('width', r.w); rEl.setAttribute('height', r.h);
+      rEl.setAttribute('rx', r.h>r.w ? r.w*0.4 : r.h*0.4);
+      rEl.setAttribute('fill', badReflection ? 'url(#invalidHatch)' : cp.color);
+      rEl.setAttribute('opacity', badReflection ? '0.6' : '0.5');
+      lEl.setAttribute('x1', mainCx); lEl.setAttribute('y1', mainCy);
+      lEl.setAttribute('x2', r.x+r.w/2); lEl.setAttribute('y2', r.y+r.h/2);
+      lEl.setAttribute('stroke', badReflection ? '#c0392b' : cp.color);
+      lEl.setAttribute('opacity', '0.55');
+    }
+  }
+  function hideMirrorPreview(){
+    mirrorPreviewEls.forEach(({rect,line})=>{ rect.setAttribute('opacity','0'); line.setAttribute('opacity','0'); });
   }
 
   function hideWallPreview(){
     previewEl.setAttribute('opacity','0');
+    hideMirrorPreview();
   }
 
   // ---------- menú: modo / dificultad / nombres / modo de partida ----------
@@ -3724,7 +4369,9 @@
     if(rs && rs.forcePlayers) return rs.forcePlayers;
     if(currentMode()==='cpu') return 2;
     const r = document.querySelector('input[name="players"]:checked');
-    return r ? +r.value : 2;
+    let n = r ? +r.value : 2;
+    if(rs && rs.allowedPlayers && rs.allowedPlayers.indexOf(n)<0) n = rs.allowedPlayers[0];
+    return n;
   }
   function skinDotHTML(i){
     const sk = pieceSkins[i] || pieceSkins[0];
@@ -3798,8 +4445,20 @@
       playersFieldset.classList.add('hidden');
       const el = document.getElementById('p'+rs.forcePlayers);
       if(el) el.checked = true;
+      [2,3,4].forEach(n=>{ const inp=document.getElementById('p'+n), lab=document.querySelector('label[for="p'+n+'"]'); if(inp) inp.classList.remove('hidden'); if(lab) lab.classList.remove('hidden'); });
     } else {
       playersFieldset.classList.toggle('hidden', m==='cpu');
+      const allowed = rs && rs.allowedPlayers;
+      [2,3,4].forEach(n=>{
+        const inp = document.getElementById('p'+n), lab = document.querySelector('label[for="p'+n+'"]');
+        const ok = !allowed || allowed.indexOf(n)>=0;
+        if(inp) inp.classList.toggle('hidden', !ok);
+        if(lab) lab.classList.toggle('hidden', !ok);
+      });
+      if(allowed && allowed.indexOf(currentPlayersCount())<0){
+        const fb = document.getElementById('p'+allowed[0]);
+        if(fb) fb.checked = true;
+      }
     }
     renderNameInputs(currentPlayersCount(), teamAlly ? [1,2,3] : m==='cpu');
     refreshCustomLevelSelect();
@@ -4211,7 +4870,7 @@
         el.tabIndex = on ? 0 : -1;
       });
       const m = MODE_BY_KEY[pending], r = rs(pending);
-      const players = r.forcePlayers ? r.forcePlayers+' jugadores' : '2 a 4 jugadores';
+      const players = r.forcePlayers ? r.forcePlayers+' jugadores' : (r.allowedPlayers ? r.allowedPlayers.join(' o ')+' jugadores' : '2 a 4 jugadores');
       const who = r.forceLocal ? (pending==='teams' ? 'Local o Yo + IA' : 'Solo local') : 'Local o vs. IA';
       modeDetail.innerHTML = '<div class="md-inner">'
         + '<div class="md-head"><span class="md-name">'+escapeHtml(r.label)+'</span><span class="stars-row" title="Complejidad">'+starsHTML(m.level,3,13)+'</span></div>'
@@ -4894,6 +5553,12 @@
     window.__quoridorMaze = { generateMaze, generateRandomWalls, tryPlaceEnvWall, MAZE_PATTERNS, MAZE_RULES, MAZE_DENSITIES, MAZE_TEMPLATES,
       mazeContext, mazeTable, mazePool, mazeEval, mazeJudge, userPatternFrom, seedToText, seedFromText, generateDailyLayout, hashStringToSeed, SEED_SPACE,
       getState:()=> state, bfsShortestPath, openOverlay, closeOverlay };
+    window.__quoridorParty = { initGame, getState:()=> state, botAct, botPartyPowers, performMove, commitWall, advanceTurn, render,
+      partyUse, partyCanUse, partyCanTake, partySpawn, partyStunTarget, partyBreakChoice, partyNewRound, partyPickSpawnCell,
+      computeValidMoves, distanceToCenter, hasPath, PARTY_POWERS, PARTY_TYPES, EMOTE_ICON_IDS, RULESETS,
+      mirrorSlot, mirrorSlots, mirrorNeededCopies, evaluateWallForMode, wallRect, getWallSlotFromPoint, canPlaceWallSlot,
+      wallEdges, mirrorWallCost, MIRROR_CFG,
+      K:{ PARTY_MAX_HELD, PARTY_TOKEN_TTL, PARTY_RESPAWN_MIN, PARTY_SPAWN_MAX_DIST, PARTY_WALL_BONUS_MAX, PARTY_SHIELD_ROUNDS, PARTY_STUN_IMMUNE_TURNS, PARTY_STUN_MAX_LEAD } };
   }
   modePicker.build();
   updateMenuVisibility();

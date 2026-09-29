@@ -173,6 +173,11 @@
     <button type="button" class="kbtn small mode-btn" id="wallModeBtn" data-mode="wall">🧱 Colocar pared</button>
     <button type="button" class="kbtn small mode-btn hidden" id="sprintBtn" aria-label="Sprint: paso doble en línea recta"><img class="btn-ico" src="assets/emotes/icons/exclamations.png" alt=""> Sprint <span id="sprintCount">2</span></button>
   </div>
+  <div class="power-bar hidden" id="powerBar">
+    <div class="power-btns" id="powerBtns"></div>
+    <div class="power-note" id="powerNote" aria-live="polite"></div>
+    <details class="power-help"><summary>¿Qué hace cada poder?</summary><ul id="powerHelpList"></ul></details>
+  </div>
   <p class="hint-line" id="hintLine">Tocá una casilla resaltada para moverte.</p>
 
   <div class="game-layout">
@@ -200,6 +205,11 @@
             <rect x="0" y="0" width="630" height="630" fill="white"/>
             <circle id="fogMaskHole" cx="315" cy="315" r="140" fill="url(#fogGrad)"/>
           </mask>
+          <!-- Espejo: trama para el aviso "el reflejo choca / bloquea" en la vista previa -->
+          <pattern id="invalidHatch" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+            <rect width="7" height="7" fill="#c0392b" opacity="0.4"/>
+            <line x1="0" y1="0" x2="0" y2="7" stroke="#7a231a" stroke-width="2.2"/>
+          </pattern>
         </defs>
         <g id="gridGroup"></g>
         <g id="movesGroup"></g>
@@ -207,6 +217,15 @@
         <g id="piecesGroup"></g>
         <rect id="fogOverlay" x="0" y="0" width="630" height="630" fill="rgba(10,12,22,0.7)" mask="url(#fogMask)" opacity="0" pointer-events="none"></rect>
         <g id="emotesGroup" pointer-events="none"></g>
+        <!-- Espejo: líneas punteadas de la copia original a cada reflejo (hasta 3 con 4 jugadores) -->
+        <g id="mirrorPreviewGroup" pointer-events="none">
+          <line id="wallMirrorLine0" x1="0" y1="0" x2="0" y2="0" stroke="transparent" stroke-width="2" stroke-dasharray="5 4" opacity="0"></line>
+          <line id="wallMirrorLine1" x1="0" y1="0" x2="0" y2="0" stroke="transparent" stroke-width="2" stroke-dasharray="5 4" opacity="0"></line>
+          <line id="wallMirrorLine2" x1="0" y1="0" x2="0" y2="0" stroke="transparent" stroke-width="2" stroke-dasharray="5 4" opacity="0"></line>
+          <rect id="wallMirrorPreview0" x="0" y="0" width="0" height="0" fill="transparent" opacity="0" pointer-events="none"></rect>
+          <rect id="wallMirrorPreview1" x="0" y="0" width="0" height="0" fill="transparent" opacity="0" pointer-events="none"></rect>
+          <rect id="wallMirrorPreview2" x="0" y="0" width="0" height="0" fill="transparent" opacity="0" pointer-events="none"></rect>
+        </g>
         <rect id="wallPreview" x="0" y="0" width="0" height="0" fill="transparent" opacity="0" pointer-events="none"></rect>
       </svg>
       <p class="board-note">El objetivo es la casilla central marcada con el anillo dorado.</p>
@@ -259,6 +278,19 @@
     <p id="handoffMsg">El siguiente jugador toma el control.</p>
     <div class="modal-actions">
       <button class="kbtn yellow big block" id="handoffReadyBtn">Listo</button>
+    </div>
+  </div>
+</div>
+
+<div id="mirrorCoinOverlay" class="overlay-backdrop hidden">
+  <div class="modal-card mirror-coin-card" id="mirrorCoinCard">
+    <h2>Sorteo de apertura</h2>
+    <div class="mirror-coin-scene">
+      <div class="mirror-coin" id="mirrorCoin">1</div>
+    </div>
+    <p id="mirrorCoinText" aria-live="polite">Sorteando quién abre…</p>
+    <div class="modal-actions">
+      <button class="kbtn yellow big block" id="mirrorCoinBtn" disabled>Empezar</button>
     </div>
   </div>
 </div>
