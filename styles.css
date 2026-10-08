@@ -182,11 +182,11 @@ legend{ font-weight:600; margin-bottom:10px; font-size:.9rem; color:var(--ink-so
 .header-actions{ display:flex; gap:8px; }
 .hint-line{ color:var(--ink-soft); font-size:.86rem; margin:0 0 14px; min-height:1.2em; }
 .hint-line.thinking{ animation:movePulse 1.2s ease-in-out infinite; font-style:italic; }
-.mode-toggle{ display:flex; gap:8px; margin:0 0 8px; }
+.mode-toggle{ display:flex; flex-wrap:wrap; gap:8px; margin:0 0 8px; }
 .mode-btn{ flex:1; font-size:.78rem; white-space:nowrap; }
 .mode-btn:not(.active){ }
 .mode-btn .btn-ico{ width:16px; height:16px; flex:none; }
-#sprintBtn{ flex:0 0 auto; }
+#sprintBtn, #undoBtn{ flex:0 0 auto; }
 .mode-btn.active{ --img:url(assets/ui/btn-yellow-rect.png); --img-down:url(assets/ui/btn-yellow-rect-down.png); --btn-ink:#3b2a05; }
 .game-layout{ display:flex; gap:22px; align-items:flex-start; flex-wrap:wrap; }
 .board-wrap{ flex:1 1 420px; max-width:560px; background:var(--panel); padding:16px; border-radius:20px; box-shadow:0 14px 32px var(--shadow); border:1px solid var(--line); }
@@ -357,6 +357,34 @@ legend{ font-weight:600; margin-bottom:10px; font-size:.9rem; color:var(--ink-so
 .streak-dots span.on{ background:var(--accent); border-color:var(--accent); }
 .daily-stars{ display:flex; justify-content:center; gap:4px; margin:8px 0; }
 .daily-stars img{ width:34px; height:32px; }
+#dailyCard{ max-width:400px; }
+.daily-mode{ display:flex; align-items:center; justify-content:center; gap:10px; text-align:left; margin:0 0 6px; }
+.daily-mode .dm-emoji{ font-size:2.1rem; line-height:1; }
+.daily-mode b{ display:block; font-family:var(--font-ui); font-size:1.02rem; }
+.daily-mode small{ color:var(--ink-soft); font-size:.8rem; }
+.daily-status .daily-warn{ color:var(--ink); font-weight:700; }
+.reward-streak{ margin:6px 0 0; padding:7px 12px; border-radius:12px; background:var(--panel-2); border:1.5px solid var(--line); font-size:.88rem; font-weight:700; color:var(--ink); line-height:1.35; }
+.reward-streak.shield{ border-color:var(--accent); }
+
+/* calendario del desafío diario */
+.daily-cal{ margin-top:12px; padding-top:12px; border-top:1.5px solid var(--line); }
+.cal-head{ display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; }
+.cal-head strong{ text-transform:capitalize; font-family:var(--font-ui); font-size:.98rem; }
+.cal-nav{ width:34px; height:34px; border-radius:50%; border:2px solid var(--line); background:var(--panel-2); color:var(--ink); font-size:1.1rem; font-weight:800; line-height:1; cursor:pointer; }
+.cal-nav:disabled{ opacity:.35; cursor:default; }
+.cal-dow, .cal-grid{ display:grid; grid-template-columns:repeat(7, 1fr); gap:4px; }
+.cal-dow span{ text-align:center; font-size:.72rem; font-weight:800; color:var(--ink-soft); }
+.cal-grid{ margin-top:4px; }
+.cal-day{ aspect-ratio:1; border-radius:10px; background:var(--panel-2); border:1.5px solid var(--line); display:flex; flex-direction:column; align-items:center; justify-content:center; font-size:.78rem; line-height:1.1; color:var(--ink); }
+.cal-day b{ font-weight:800; }
+.cal-day i{ font-style:normal; font-size:.5rem; min-height:.6rem; letter-spacing:-1px; }
+.cal-day.blank{ background:transparent; border-color:transparent; }
+.cal-day.future{ opacity:.35; }
+.cal-day.done{ background:var(--accent); border-color:var(--accent); color:var(--accent-ink); }
+.cal-day.shield{ border-style:dashed; border-color:var(--accent); }
+.cal-day.today{ outline:2.5px solid var(--ink); outline-offset:1px; }
+.cal-legend{ margin:8px 0 0 !important; font-size:.8rem; text-align:center; }
+
 
 .turn-timer{ font-weight:700; font-size:.86rem; padding:3px 10px; border-radius:999px; background:var(--panel-2); border:1px solid var(--line); margin-left:8px; }
 .turn-timer.low{ color:var(--danger); border-color:var(--danger); }
@@ -680,21 +708,48 @@ body::after{
 .cpu-tag.power-tag{ gap:3px; }
 .cpu-tag.power-tag.on{ background:var(--accent); color:var(--accent-ink); }
 
-/* ================= ESPEJO: sorteo de apertura y tags del panel ================= */
-.cpu-tag.mirror-tag{ gap:3px; }
-.mirror-coin-card{ text-align:center; }
-.mirror-coin-scene{ display:flex; justify-content:center; margin:6px 0 14px; }
-.mirror-coin{
-  width:96px; height:96px; border-radius:50%; display:flex; align-items:center; justify-content:center;
-  font-size:2.1rem; font-weight:800; color:#fff; background:var(--panel-2);
-  box-shadow:0 6px 16px rgba(0,0,0,.35), inset 0 0 0 4px rgba(255,255,255,.25);
-  transition:background-color 90ms linear;
+
+/* ---------- tienda: premium, ofertas y tableros (137-141) ---------- */
+.shop-extras{ margin:8px 0 6px; display:flex; flex-direction:column; gap:6px; }
+.premium-row{ display:flex; align-items:center; justify-content:space-between; gap:8px; padding:8px 10px; border-radius:12px; background:var(--panel-2); border:1.5px solid var(--accent); font-size:.78rem; text-align:left; }
+.premium-row.on{ background:var(--accent); color:var(--accent-ink); font-weight:700; }
+.premium-row .pr-actions{ display:flex; gap:6px; flex:0 0 auto; }
+.shop-tabs{ overflow-x:auto; }
+.shop-tab{ flex:1 0 auto; padding:8px 10px; }
+.shop-item .tag.offer{ background:#d9534f; }
+.shop-item .cd, .det-sub .cd{ font-family:var(--font-ui); font-size:.66rem; color:var(--ink-soft); font-variant-numeric:tabular-nums; }
+.theme-sw{ display:block; border-radius:8px; border:1px solid var(--line); }
+.pack-ico{ display:block; line-height:1; }
+.det-eco{ font-size:.7rem; color:var(--ink-soft); margin:-4px 0 8px; }
+.win-double{ margin-top:10px; }
+.mode-card.is-locked .mc-name::after{ content:" 🔒"; }
+
+/* tableros: cada tema define sus colores claro/oscuro y se aplica con data-board en <html> */
+:root[data-board]{ --board:var(--tb-l1); --board-alt:var(--tb-l2); }
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"])[data-board]{ --board:var(--tb-d1); --board-alt:var(--tb-d2); }
 }
-.mirror-coin.tossing{ animation:mirrorCoinPulse .55s ease-in-out infinite; }
-@keyframes mirrorCoinPulse{
-  0%{ transform:scaleX(1); }
-  50%{ transform:scaleX(0.72) rotate(3deg); }
-  100%{ transform:scaleX(1); }
-}
-#mirrorCoinText{ min-height:1.4em; }
-#mirrorCoinText b{ color:var(--ink); }
+:root[data-theme="dark"][data-board]{ --board:var(--tb-d1); --board-alt:var(--tb-d2); }
+:root[data-board="mar"]{       --tb-l1:#d8e6ea; --tb-l2:#b9d3db; --tb-d1:#1d2f38; --tb-d2:#274350; }
+:root[data-board="bosque"]{    --tb-l1:#dde5d1; --tb-l2:#c3d1b0; --tb-d1:#1f2b1f; --tb-d2:#2a3a29; }
+:root[data-board="carbon"]{    --tb-l1:#c9ccd1; --tb-l2:#aeb3ba; --tb-d1:#26282c; --tb-d2:#34373d; }
+:root[data-board="primavera"]{ --tb-l1:#f3e4eb; --tb-l2:#e8c9d6; --tb-d1:#33232b; --tb-d2:#44303a; }
+:root[data-board="verano"]{    --tb-l1:#f6ecc4; --tb-l2:#ecd98f; --tb-d1:#352f1a; --tb-d2:#463e22; }
+
+
+/* ===== v4: ayuda de distancia, pista, pastel, metas por lado ===== */
+.aux-toggle{ margin:0 0 8px; }
+.aux-toggle .mode-btn{ flex:1; }
+.dist-chips{ display:flex; flex-wrap:wrap; align-items:center; gap:6px 8px; margin:-6px 0 12px; font-size:.84rem; }
+.dist-chips.hidden{ display:none; }
+.dist-chip{ display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:999px; background:var(--panel-2); border:2px solid transparent; color:var(--ink); font-weight:600; white-space:nowrap; }
+.dist-chip.active{ border-color:var(--pc, var(--accent)); }
+.dist-chip b{ font-variant-numeric:tabular-nums; font-weight:800; }
+.dist-dot{ width:10px; height:10px; border-radius:50%; background:var(--pc, var(--accent)); flex:none; }
+.dist-sep{ color:var(--ink-soft); }
+.hint-cell{ fill:rgba(255,204,51,.30); stroke:#ffcc33; stroke-width:4; animation:hintPulse .6s ease-in-out infinite alternate; }
+.hint-wall{ fill:#ffcc33; stroke:#fff; stroke-width:2; opacity:.9; animation:hintPulse .6s ease-in-out infinite alternate; }
+@keyframes hintPulse{ from{ opacity:.55; } to{ opacity:1; } }
+@media (prefers-reduced-motion: reduce){ .hint-cell, .hint-wall{ animation:none; } }
+.stats-sub{ font-size:.95rem; margin:14px 0 6px; }
+.seat-hint{ margin:-2px 0 8px; }

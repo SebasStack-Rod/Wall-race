@@ -3,6 +3,26 @@
 
   const BOARD_PX = 630;
   const DIRS4 = [[-1,0],[1,0],[0,-1],[0,1]];
+  // ---------- Estado del motor de IA (74, 75, 82, 84) ----------
+  let HEADLESS = false;                       // pruebas automáticas: sin dibujar, sin sonido, sin estadísticas
+  let edgesEpoch = 0;                         // sube cada vez que cambian las paredes de la partida (invalida cachés)
+  const BFS_STATS = { calls:0 };
+  const _Q = new Int32Array(4096);
+  const _STAMPS = new Uint32Array(4096);
+  let _stamp = 0;
+  const _maskCache = { set:null, epoch:-1, n:-1, size:-1, mask:null };
+  const _distCache = { set:null, epoch:-1, n:-1, size:-1, maps:new Map() };
+  function makeRng(seed){
+    let a = seed>>>0;
+    return function(){
+      a |= 0; a = a + 0x6D2B79F5 | 0;
+      let t = Math.imul(a ^ a>>>15, 1 | a);
+      t = t + Math.imul(t ^ t>>>7, 61 | t) ^ t;
+      return ((t ^ t>>>14) >>> 0) / 4294967296;
+    };
+  }
+  let botRand = makeRng((Math.random()*4294967296)>>>0);   // azar propio de la IA: con semilla se puede repetir una partida
+  function setBotSeed(s){ botRand = makeRng(s); }
   // ---------- 2v2: identidad de equipo (48) y compensación de orden (50) ----------
   // Los colores de las fichas son libres (skins), así que el equipo se marca con un anillo aparte: A = blanco continuo,
   // B = negro punteado (la forma del trazo distingue el equipo aunque no se vean bien los colores).
@@ -76,9 +96,33 @@
     { id:'fr_f6', type:'frame', frame:'f6', name:'Pensamiento con borde', price:120 },
     { id:'fr_f7', type:'frame', frame:'f7', name:'Estallido', price:150 },
   ];
+  // ---------- 137 · sumideros de monedas: temas de tablero (cosméticos) ----------
+  // 141 · availableFrom / availableTo (ISO UTC) limitan sólo la COMPRA; lo ya comprado se conserva al vencer la oferta.
+  // sinceFirstSessionHours cuenta desde la primera sesión (wallet.firstSeen).
+  SHOP_ITEMS.push(
+    { id:'th_clasico', type:'theme', theme:'clasico', name:'Clásico', price:0, colors:['#e7ddc9','#ddcfb0'] },
+    { id:'th_mar', type:'theme', theme:'mar', name:'Mar', price:120, colors:['#d8e6ea','#b9d3db'] },
+    { id:'th_bosque', type:'theme', theme:'bosque', name:'Bosque', price:120, colors:['#dde5d1','#c3d1b0'] },
+    { id:'th_carbon', type:'theme', theme:'carbon', name:'Carbón', price:200, colors:['#c9ccd1','#aeb3ba'] },
+    { id:'th_primavera', type:'theme', theme:'primavera', name:'Primavera', price:150, season:true,
+      availableFrom:'2026-09-23T00:00:00Z', availableTo:'2026-12-21T00:00:00Z', colors:['#f3e4eb','#e8c9d6'] },
+    { id:'th_verano', type:'theme', theme:'verano', name:'Verano', price:150, season:true,
+      availableFrom:'2026-12-21T00:00:00Z', availableTo:'2027-03-21T00:00:00Z', colors:['#f6ecc4','#ecd98f'] },
+    { id:'pk_bienvenida', type:'pack', name:'Paquete de bienvenida', price:0, sinceFirstSessionHours:48,
+      grants:{ coins:100, items:['e_heart','th_mar'] } }
+  );
   const SHOP_TABS = [
     { id:'common', label:'Comunes' }, { id:'rare', label:'Raros' }, { id:'epic', label:'Épicos' }, { id:'frames', label:'Globos' },
+    { id:'themes', label:'Tableros' }, { id:'offers', label:'Ofertas' },
   ];
+
+  // ---------- 138/139 · monetización ----------
+  const AD_UNLOCK_MS = 30 * 60 * 1000;            // un anuncio recompensado desbloquea 30 minutos
+  const AD_TIMEOUT_MS = 5 * 60 * 1000;            // si el puente nunca responde, el pedido se descarta (sin pago)
+  const LOCKED_MODES = ['party', 'hunter'];       // modos que piden anuncio o Premium (para no bloquear ninguno: [])
+  const PREMIUM_PRODUCT_ID = 'premium_unlock';    // id del producto único en Play Console
+  const PREMIUM_GRACE_MS = 3 * 24 * 3600 * 1000;  // sin conexión, el último chequeo verificado vale 3 días
+  const CLOCK_BACK_TOL_MS = 2 * 60 * 1000;        // tolerancia antes de considerar que se atrasó el reloj
 
   // ---------- modos de partida ----------
   // Rey de la colina: turnos SEGUIDOS dentro de la zona según la cantidad de jugadores (con más rivales
@@ -117,21 +161,15 @@
   const PARTY_TYPES = Object.keys(PARTY_POWERS);
   const PARTY_BOT_USE = { easy:0.5, normal:0.75, hard:0.95, expert:1 };   // con qué ganas cada IA usa un poder que le conviene
   const PARTY_BOT_DETOUR = { easy:0, normal:1, hard:1, expert:2 };        // pasos de desvío que acepta para agarrar un poder
-  // Espejo: valores calibrados con 1000 partidas IA-experta-vs-IA-experta por tamaño (52.0% de victorias de quien
-  // abre, ningún tamaño llega al 58%) más un chequeo con IA normal (5×5 sube a 63%, así que la compensación
-  // queda en un valor moderado en vez de en 0). Objeto (no const suelta) para poder recalibrar en caliente en pruebas.
-  const MIRROR_CFG = {
-    cost: 1,          // paredes que se descuentan de tu reserva por cada pared que colocás (1 o 2; la copia reflejada nunca se paga aparte)
-    secondBonus: 1,   // paredes extra para quien abre segundo, tras el sorteo
-  };
   const RULESETS = {
     classic: { label:'Clásico', hint:'Las reglas de siempre: movete y bloqueá con paredes hasta llegar al centro.' },
+    official:{ label:'Clásico oficial', hint:'Como el Quoridor de mesa: gana quien llega primero al lado opuesto del tablero (la franja de su color), no al centro. Con 3 o 4 jugadores cada uno va al lado contrario al suyo.' },
     fog:     { label:'Niebla de guerra', hint:'Sólo ves las paredes cercanas a quien juega en ese turno. Las lejanas siguen bloqueando aunque no se vean.', forcePlayers:null },
     teams:   { label:'2v2 (equipos)', hint:'4 fichas: Equipo A (jugadores 1 y 3) contra Equipo B (jugadores 2 y 4). Cada equipo comparte una sola reserva de paredes, empieza un equipo sorteado (el otro recibe una pared de compensación) y podés intercambiar lugar con tu aliado. Gana el primero que llega al centro, o el equipo cuyos dos aliados llegan. Se puede jugar entre 4 personas o «Yo + IA contra 2 IA».', forcePlayers:4, forceLocal:true },
     party:   { label:'Fiesta', hint:`Cada tanto aparece un poder en una casilla justa del tablero y dura ${PARTY_TOKEN_TTL} rondas si nadie lo agarra. Pared extra se aplica al instante; los demás (paso doble, turno extra, aturdir, romper pared y escudo) los guardás —hasta ${PARTY_MAX_HELD}— y los usás en tu turno. Un poder por turno, y cada uno trae su tope para que la partida siga pareja. La IA también los usa.` },
     maze:    { label:'Laberinto', hint:'El tablero arranca con paredes al azar ya colocadas (o con tu propio diseño del editor de niveles), garantizando que siempre haya camino.' },
     blitz:   { label:'Contrarreloj', hint:'Cada turno corre contra el reloj (10, 20, 30 o 45 s; por defecto 10 s + el tamaño del tablero), sea para mover o para poner una pared. Si se acaba, se juega solo el paso que más te acerca al centro (nunca una pared). Con 2 jugadores también hay reloj de ajedrez: 60 s de banco y +3 s por jugada; pierde quien llega a 0.' },
-    mirror:  { label:'Espejo', hint:'Cada pared que colocás aparece reflejada: con 2 jugadores, en el punto opuesto del tablero; con 4, también girada en cuartos de vuelta hacia las otras dos esquinas. Al empezar se sortea quién abre; quien juega segundo recibe una pared extra de compensación.', allowedPlayers:[2,4] },
+    mirror:  { label:'Espejo', hint:'Sólo para 2 jugadores. Cada pared que colocás aparece también reflejada en el punto opuesto del tablero.', forcePlayers:2 },
     hill:    { label:'Rey de la colina', hint:`No alcanza con pisar el centro: hay que terminar turnos SEGUIDOS dentro de la zona central (${HILL_TARGET_TEXT}). Si salís de la zona o te empujan, el conteo vuelve a 0. Cada jugador tiene ${HILL_PUSHES} empujones para sacar al rival, y no se puede cerrar la zona a menos de ${HILL_MIN_ACCESSES} accesos.` },
     hunter:  { label:'Cazador y fugitivo', hint:'El Jugador 1 es el fugitivo (contra la IA elegís tu rol) y gana si llega al centro. Los cazadores ganan atrapándolo —terminar su movimiento junto al fugitivo, sin pared de por medio— o si se acaba el límite de rondas. El fugitivo tiene 2 sprints y deja huellas durante 2 turnos; los cazadores comparten un pozo de paredes.' },
   };
@@ -266,6 +304,14 @@
   const moveModeBtn = document.getElementById('moveModeBtn');
   const wallModeBtn = document.getElementById('wallModeBtn');
   const sprintBtn = document.getElementById('sprintBtn');
+  const undoBtn = document.getElementById('undoBtn');
+  const auxToggle = document.getElementById('auxToggle');
+  const pieBtn = document.getElementById('pieBtn');
+  const distChipsEl = document.getElementById('distChips');
+  const boardNoteEl = document.getElementById('boardNote');
+  const distHelpToggle = document.getElementById('distHelpToggle');
+  const lotteryToggle = document.getElementById('lotteryToggle');
+  const pieToggle = document.getElementById('pieToggle');
   const powerBar = document.getElementById('powerBar');
   const powerBtns = document.getElementById('powerBtns');
   const powerNote = document.getElementById('powerNote');
@@ -275,6 +321,7 @@
   const hintLine = document.getElementById('hintLine');
   const repeatMapBtn = document.getElementById('repeatMapBtn');
   const winMapInfo = document.getElementById('winMapInfo');
+  const winKeyMoment = document.getElementById('winKeyMoment');
   const mazeRandomOptions = document.getElementById('mazeRandomOptions');
   const mazeDensityGroup = document.getElementById('mazeDensityGroup');
   const mazeDensityHint = document.getElementById('mazeDensityHint');
@@ -329,6 +376,13 @@
   const playDailyBtn = document.getElementById('playDailyBtn');
   const closeDailyBtn = document.getElementById('closeDailyBtn');
   const dailyLinkBtn = document.getElementById('dailyLinkBtn');
+  const shareDailyBtn = document.getElementById('shareDailyBtn');
+  const shareDailyOverlayBtn = document.getElementById('shareDailyOverlayBtn');
+  const dailyCalTitle = document.getElementById('dailyCalTitle');
+  const dailyCalGrid = document.getElementById('dailyCalGrid');
+  const dailyCalLegend = document.getElementById('dailyCalLegend');
+  const dailyCalPrev = document.getElementById('dailyCalPrev');
+  const dailyCalNext = document.getElementById('dailyCalNext');
 
   const rulesetSelect = document.getElementById('rulesetSelect');
   const rulesetHint = document.getElementById('rulesetHint');
@@ -365,18 +419,12 @@
   const handoffTitle = document.getElementById('handoffTitle');
   const handoffMsg = document.getElementById('handoffMsg');
   const handoffReadyBtn = document.getElementById('handoffReadyBtn');
-  const mirrorCoinOverlay = document.getElementById('mirrorCoinOverlay');
-  const mirrorCoinEl = document.getElementById('mirrorCoin');
-  const mirrorCoinText = document.getElementById('mirrorCoinText');
-  const mirrorCoinBtn = document.getElementById('mirrorCoinBtn');
-  const mirrorPreviewEls = [0,1,2].map(k=> ({
-    rect: document.getElementById('wallMirrorPreview'+k),
-    line: document.getElementById('wallMirrorLine'+k),
-  }));
   const moreOverlay = document.getElementById('moreOverlay');
   const moreLinkBtn = document.getElementById('moreLinkBtn');
   const closeMoreBtn = document.getElementById('closeMoreBtn');
   const shopOverlay = document.getElementById('shopOverlay');
+  const shopExtrasEl = document.getElementById('shopExtras');
+  const winDoubleBtn = document.getElementById('winDoubleBtn');
   const shopLinkBtn = document.getElementById('shopLinkBtn');
   const closeShopBtn = document.getElementById('closeShopBtn');
   const shopSlotsEl = document.getElementById('shopSlots');
@@ -397,6 +445,9 @@
   const vibrateToggle = document.getElementById('vibrateToggle');
   const showMovesToggle = document.getElementById('showMovesToggle');
   const glassToggle = document.getElementById('glassToggle');
+  const explainToggle = document.getElementById('explainToggle');
+  const adaptiveToggle = document.getElementById('adaptiveToggle');
+  const adaptiveHint = document.getElementById('adaptiveHint');
   const difficultyHint = document.getElementById('difficultyHint');
 
   const customLevelFieldset = document.getElementById('customLevelFieldset');
@@ -424,7 +475,7 @@
   const modeDetail = document.getElementById('modeDetail');
   const modesConfirmBtn = document.getElementById('modesConfirmBtn');
   const modesCloseBtn = document.getElementById('modesCloseBtn');
-  const overlayEls = { campaign:campaignOverlay, modes:modesOverlay, win:winOverlay, confirm:confirmOverlay, settings:settingsOverlay, tutorial:tutorialOverlay, stats:statsOverlay, skins:skinsOverlay, achievements:achievementsOverlay, daily:dailyOverlay, pause:pauseOverlay, more:moreOverlay, shop:shopOverlay, namePrompt:namePromptOverlay, handoff:handoffOverlay, mirrorCoin:mirrorCoinOverlay };
+  const overlayEls = { campaign:campaignOverlay, modes:modesOverlay, win:winOverlay, confirm:confirmOverlay, settings:settingsOverlay, tutorial:tutorialOverlay, stats:statsOverlay, skins:skinsOverlay, achievements:achievementsOverlay, daily:dailyOverlay, pause:pauseOverlay, more:moreOverlay, shop:shopOverlay, namePrompt:namePromptOverlay, handoff:handoffOverlay };
 
   let state = null;
   let mode = 'move'; // 'move' | 'wall'
@@ -447,6 +498,74 @@
     if(offsetDays) d.setDate(d.getDate()+offsetDays);
     return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
   }
+  // ---------- desafío diario: fecha UTC, rotación de modos y racha (88-91) ----------
+  // Todo lo del desafío diario usa la fecha UTC (no la del dispositivo) para que, durante ese día, todos
+  // los jugadores del mundo reciban exactamente el mismo desafío, sin importar su huso horario.
+  const DAY_MS = 86400000;
+  const DAILY_EPOCH_UTC = Date.UTC(2026, 0, 1);   // el desafío #1 es el del 1/1/2026 (UTC)
+  function utcDayKey(offsetDays, nowMs){
+    const d = new Date((nowMs==null ? Date.now() : nowMs) + (offsetDays||0)*DAY_MS);
+    return d.getUTCFullYear()+'-'+String(d.getUTCMonth()+1).padStart(2,'0')+'-'+String(d.getUTCDate()).padStart(2,'0');
+  }
+  function dayKeyToMs(key){ const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(key||''); return m ? Date.UTC(+m[1], +m[2]-1, +m[3]) : NaN; }
+  function dayKeyDiff(a, b){ return Math.round((dayKeyToMs(b) - dayKeyToMs(a))/DAY_MS); }   // días de a a b
+  function dayKeyAdd(key, n){ return utcDayKey(0, dayKeyToMs(key) + n*DAY_MS); }
+  // Rotación (89): cada día toca la siguiente entrada, así nunca hay dos días seguidos con el mismo tipo de partida.
+  // Todos son desafíos de una sola ficha contra el par (casillas al centro), cada uno con su regla propia.
+  // `slack` = movimientos de más que todavía valen 2 estrellas. `turnSeconds` = reloj por turno (Contrarreloj).
+  const DAILY_ROTATION = [
+    { id:'maze',    ruleset:'maze',  emoji:'🧩', label:'Laberinto',        size:9,  density:'medio',  slack:3,
+      hint:'Llegá al centro en la menor cantidad de movimientos. El tablero de hoy es igual para todos.' },
+    { id:'fog',     ruleset:'fog',   emoji:'🌫️', label:'Niebla de guerra', size:9,  density:'ligero', slack:6,
+      hint:'Sólo ves las paredes cercanas, pero las lejanas igual bloquean. Explorá con cuidado.' },
+    { id:'blitz',   ruleset:'blitz', emoji:'⏱️', label:'Contrarreloj',     size:9,  density:'medio',  slack:3, turnSeconds:10,
+      hint:'Tenés 10 s por turno. Si se acaba, perdés el turno y suma un movimiento.' },
+    { id:'maze-d',  ruleset:'maze',  emoji:'🧱', label:'Laberinto denso',  size:9,  density:'denso',  slack:4,
+      hint:'Más paredes que de costumbre: buscá el camino más corto antes de moverte.' },
+    { id:'fog-xl',  ruleset:'fog',   emoji:'🌫️', label:'Niebla grande',    size:11, density:'medio',  slack:8,
+      hint:'Tablero de 11×11 con niebla: sólo ves lo que tenés cerca.' },
+    { id:'blitz-d', ruleset:'blitz', emoji:'⚡', label:'Relámpago denso',  size:9,  density:'denso',  slack:4, turnSeconds:8,
+      hint:'Laberinto denso y sólo 8 s por turno. Si se acaba, perdés el turno y suma un movimiento.' },
+  ];
+  function dailyNumberOf(key){ return Math.round((dayKeyToMs(key) - DAILY_EPOCH_UTC)/DAY_MS) + 1; }
+  function dailyModeFor(key){
+    const n = dailyNumberOf(key) - 1, L = DAILY_ROTATION.length;
+    return DAILY_ROTATION[((n % L) + L) % L];
+  }
+  const dailyCache = {};
+  // El desafío completo de una fecha: modo + tablero + par. Es una función pura de la fecha UTC.
+  function dailyChallengeFor(key){
+    key = key || utcDayKey();
+    if(dailyCache[key]) return dailyCache[key];
+    const cfg = dailyModeFor(key);
+    const walls = generateDailyLayout(key, cfg.size, cfg.density);
+    const blocked = new Set();
+    walls.forEach(w=> wallEdges(w.r,w.c,w.orientation).forEach(e=> blocked.add(edgeKey(e[0],e[1],e[2],e[3]))));
+    const mid = (cfg.size-1)/2;
+    const par = bfsShortestPath(0, mid, mid, mid, blocked, cfg.size);
+    const ch = Object.assign({}, cfg, { dateKey:key, number:dailyNumberOf(key), walls, par });
+    const keys = Object.keys(dailyCache);
+    if(keys.length>8) delete dailyCache[keys[0]];
+    dailyCache[key] = ch;
+    return ch;
+  }
+  // Racha (91): se cuenta por días UTC seguidos. Los escudos protegen la racha cuando se pierden días:
+  //  · se gana 1 escudo cada 7 días seguidos (se guardan hasta DAILY_SHIELD_MAX);
+  //  · cada día perdido gasta 1 escudo, y sólo se gastan al volver a resolver un desafío;
+  //  · si faltaste más días de los que cubren tus escudos, la racha se corta (y no se gasta ninguno);
+  //  · los días protegidos mantienen la racha pero no la suman.
+  const DAILY_SHIELD_MAX = 2;
+  const DAILY_SHIELD_EVERY = 7;
+  function dailyStreakStatus(d, today){
+    if(!d.lastDate) return { alive:false, streak:0, missed:0, covered:false, gap:null };
+    const gap = dayKeyDiff(d.lastDate, today);          // 0 = ya jugó hoy · 1 = ayer · 2+ = faltó
+    if(!(gap>=2)) return { alive:true, streak:d.streak||0, missed:0, covered:false, gap };
+    const missed = gap-1;
+    const covered = missed <= (d.shields||0);
+    return { alive:covered, streak:covered ? (d.streak||0) : 0, missed, covered, gap };
+  }
+  function isDailyDone(d, key){ return !!(d.history && d.history[key]) || (d.bestMoves && d.bestMoves[key]!=null); }
+
   function hashStringToSeed(str){
     let h = 1779033703 ^ str.length;
     for(let i=0;i<str.length;i++){
@@ -462,22 +581,7 @@
   }
   function bfsShortestPath(startR,startC,targetR,targetC,blockedSet,size){
     if(startR===targetR && startC===targetC) return 0;
-    const visited = new Set([startR+','+startC]);
-    const queue = [[startR,startC,0]];
-    while(queue.length){
-      const [r,c,d] = queue.shift();
-      for(const [dr,dc] of DIRS4){
-        const nr=r+dr, nc=c+dc;
-        if(nr<0||nc<0||nr>=size||nc>=size) continue;
-        const key = nr+','+nc;
-        if(visited.has(key)) continue;
-        if(isBlocked(r,c,nr,nc,blockedSet)) continue;
-        if(nr===targetR && nc===targetC) return d+1;
-        visited.add(key);
-        queue.push([nr,nc,d+1]);
-      }
-    }
-    return Infinity;
+    return bfsToGoal(edgeMaskFor(blockedSet,size),size,startR*size+startC,targetR*size+targetC,null);
   }
 
   function edgeKey(r1,c1,r2,c2){
@@ -492,69 +596,164 @@
     const r=parseInt(v.substring(0,2),16), g=parseInt(v.substring(2,4),16), b=parseInt(v.substring(4,6),16);
     return `rgba(${r},${g},${b},${alpha})`;
   }
-  function wallsPerPlayer(size, playersCount){
+  // Paredes por jugador según tamaño de tablero y cantidad de jugadores (tabla calibrada con partidas IA vs IA).
+  const WALLS_TABLE = {
+    5:  { 1:6,  2:3,  3:2,  4:1 },
+    7:  { 1:12, 2:6,  3:4,  4:3 },
+    9:  { 1:20, 2:10, 3:7,  4:5 },
+    11: { 1:30, 2:15, 3:10, 4:8 },
+  };
+  // Fórmula anterior: se conserva para la campaña y el desafío diario (su dificultad no tiene que cambiar) y como respaldo.
+  function legacyWallsPerPlayer(size, playersCount){
     const total = Math.round(0.25*size*size);
     return Math.max(2, Math.floor(total/playersCount));
   }
-  function hasPath(startR,startC,targetR,targetC,blockedSet,size){
+  function wallsPerPlayer(size, playersCount, legacy){
+    const row = WALLS_TABLE[size], v = row && row[playersCount];
+    if(legacy || v==null) return legacyWallsPerPlayer(size, playersCount);
+    return v;
+  }
+  // ---------- Motor de distancias (74, 75, 82) ----------
+  // BFS con índices enteros (r*size+c), una máscara de paredes por casilla (1 arriba, 2 abajo, 4 izquierda, 8 derecha),
+  // visitados por "sello" (sin reiniciar el arreglo) y cola con puntero de cabeza. Las paredes en juego se compilan una
+  // sola vez por cambio (edgesEpoch) y la distancia de todas las casillas al objetivo sale de una sola BFS desde la meta.
+  function setMaskEdge(mask,size,r1,c1,r2,c2){
+    const a=r1*size+c1, b=r2*size+c2;
+    if(r2===r1+1){ mask[a]|=2; mask[b]|=1; }
+    else if(r2===r1-1){ mask[a]|=1; mask[b]|=2; }
+    else if(c2===c1+1){ mask[a]|=8; mask[b]|=4; }
+    else if(c2===c1-1){ mask[a]|=4; mask[b]|=8; }
+  }
+  function compileEdgeMask(set,size){
+    const mask = new Uint8Array(size*size);
+    set.forEach(key=>{
+      const p = key.split(/[,-]/);
+      setMaskEdge(mask,size,+p[0],+p[1],+p[2],+p[3]);
+    });
+    return mask;
+  }
+  function edgeMaskFor(set,size){
+    if(state && set===state.blockedEdges){
+      const c = _maskCache;
+      if(c.set===set && c.epoch===edgesEpoch && c.n===set.size && c.size===size) return c.mask;
+      const m = compileEdgeMask(set,size);
+      c.set=set; c.epoch=edgesEpoch; c.n=set.size; c.size=size; c.mask=m;
+      return m;
+    }
+    return compileEdgeMask(set,size);
+  }
+  // Aplica aristas a una máscara y devuelve cómo deshacerlo (se usa con try/finally: nunca queda una pared de prueba puesta).
+  function applyEdgesToMask(mask,size,edges){
+    const undo = [];
+    for(const e of edges){
+      const a=e[0]*size+e[1], b=e[2]*size+e[3];
+      undo.push(a,mask[a],b,mask[b]);
+      setMaskEdge(mask,size,e[0],e[1],e[2],e[3]);
+    }
+    return undo;
+  }
+  function undoMask(mask,undo){
+    for(let i=undo.length-4;i>=0;i-=4){ mask[undo[i+2]]=undo[i+3]; mask[undo[i]]=undo[i+1]; }
+  }
+  // Pasos desde `start` hasta la meta (un índice o un arreglo de banderas). Infinity si no hay camino.
+  function bfsToGoal(mask,size,start,goalIdx,goalFlags){
+    BFS_STATS.calls++;
+    if(goalFlags ? goalFlags[start] : start===goalIdx) return 0;
+    const stamp = ++_stamp;
+    let head=0, tail=0, d=0;
+    _Q[tail++] = start; _STAMPS[start] = stamp;
+    while(head<tail){
+      const levelEnd = tail; d++;
+      for(; head<levelEnd; head++){
+        const cur=_Q[head], r=(cur/size)|0, c=cur-r*size, m=mask[cur];
+        let nx;
+        if(r>0 && !(m&1)){ nx=cur-size; if(_STAMPS[nx]!==stamp){ if(goalFlags ? goalFlags[nx] : nx===goalIdx) return d; _STAMPS[nx]=stamp; _Q[tail++]=nx; } }
+        if(r<size-1 && !(m&2)){ nx=cur+size; if(_STAMPS[nx]!==stamp){ if(goalFlags ? goalFlags[nx] : nx===goalIdx) return d; _STAMPS[nx]=stamp; _Q[tail++]=nx; } }
+        if(c>0 && !(m&4)){ nx=cur-1; if(_STAMPS[nx]!==stamp){ if(goalFlags ? goalFlags[nx] : nx===goalIdx) return d; _STAMPS[nx]=stamp; _Q[tail++]=nx; } }
+        if(c<size-1 && !(m&8)){ nx=cur+1; if(_STAMPS[nx]!==stamp){ if(goalFlags ? goalFlags[nx] : nx===goalIdx) return d; _STAMPS[nx]=stamp; _Q[tail++]=nx; } }
+      }
+    }
+    return Infinity;
+  }
+  // Mapa de distancias de TODAS las casillas a la meta (BFS inversa; el tablero es no dirigido). -1 = sin camino.
+  function buildDistMap(mask,size,goals){
+    BFS_STATS.calls++;
+    const out = new Int16Array(size*size).fill(-1);
+    let head=0, tail=0;
+    for(const g of goals){ if(out[g]<0){ out[g]=0; _Q[tail++]=g; } }
+    while(head<tail){
+      const cur=_Q[head++], d=out[cur]+1, r=(cur/size)|0, c=cur-r*size, m=mask[cur];
+      let nx;
+      if(r>0 && !(m&1)){ nx=cur-size; if(out[nx]<0){ out[nx]=d; _Q[tail++]=nx; } }
+      if(r<size-1 && !(m&2)){ nx=cur+size; if(out[nx]<0){ out[nx]=d; _Q[tail++]=nx; } }
+      if(c>0 && !(m&4)){ nx=cur-1; if(out[nx]<0){ out[nx]=d; _Q[tail++]=nx; } }
+      if(c<size-1 && !(m&8)){ nx=cur+1; if(out[nx]<0){ out[nx]=d; _Q[tail++]=nx; } }
+    }
+    return out;
+  }
+  // Mapa de distancias de las paredes reales de la partida, en caché hasta que cambien las paredes.
+  function liveDistMap(set,size,sig,goals){
+    const c = _distCache;
+    if(!(c.set===set && c.epoch===edgesEpoch && c.n===set.size && c.size===size)){
+      c.set=set; c.epoch=edgesEpoch; c.n=set.size; c.size=size; c.maps.clear();
+    }
+    let m = c.maps.get(sig);
+    if(!m){ m = buildDistMap(edgeMaskFor(set,size),size,goals); c.maps.set(sig,m); }
+    return m;
+  }
+  function centerGoal(){ return state.center.r*state.size + state.center.c; }
+  function hillGoalIdx(targets){ const size=state.size; return (targets || hillCells()).map(t=> t.r*size+t.c); }
+  function hasPath(startR,startC,targetR,targetC,blockedSet,size,targets){
+    if(targets) return isFinite(distanceToHill(startR,startC,blockedSet,targets));   // varias metas: BFS multiobjetivo
     if(startR===targetR && startC===targetC) return true;
-    const visited = new Set([startR+','+startC]);
-    const queue = [[startR,startC]];
-    while(queue.length){
-      const [r,c] = queue.shift();
-      for(const [dr,dc] of DIRS4){
-        const nr=r+dr, nc=c+dc;
-        if(nr<0||nc<0||nr>=size||nc>=size) continue;
-        const key = nr+','+nc;
-        if(visited.has(key)) continue;
-        if(isBlocked(r,c,nr,nc,blockedSet)) continue;
-        if(nr===targetR && nc===targetC) return true;
-        visited.add(key);
-        queue.push([nr,nc]);
-      }
-    }
-    return false;
+    return bfsToGoal(edgeMaskFor(blockedSet,size),size,startR*size+startC,targetR*size+targetC,null) !== Infinity;
   }
-  function distanceToCenter(r, c, blockedSet){
-    if(r===state.center.r && c===state.center.c) return 0;
-    const visited = new Set([r+','+c]);
-    const queue = [[r,c,0]];
-    while(queue.length){
-      const [cr,cc,d] = queue.shift();
-      for(const [dr,dc] of DIRS4){
-        const nr=cr+dr, nc=cc+dc;
-        if(nr<0||nc<0||nr>=state.size||nc>=state.size) continue;
-        const key = nr+','+nc;
-        if(visited.has(key)) continue;
-        if(isBlocked(cr,cc,nr,nc,blockedSet)) continue;
-        if(nr===state.center.r && nc===state.center.c) return d+1;
-        visited.add(key);
-        queue.push([nr,nc,d+1]);
-      }
+  // ---------- Metas por jugador (63): centro (modos de siempre) o lado opuesto (Clásico oficial) ----------
+  const GOAL_OPPOSITE = { top:'bottom', right:'left', bottom:'top', left:'right' };
+  function goalCells(pid){
+    if(!state || state.goalMode!=='rows') return [{ r:state.objective.r, c:state.objective.c }];
+    const side = state.goalSides[pid], n = state.size, out = [];
+    for(let i=0;i<n;i++){
+      if(side==='bottom') out.push({ r:n-1, c:i });
+      else if(side==='top') out.push({ r:0, c:i });
+      else if(side==='left') out.push({ r:i, c:0 });
+      else out.push({ r:i, c:n-1 });
     }
-    return Infinity;
+    return out;
   }
-
-  // BFS multiobjetivo: pasos hasta la casilla más cercana de `targets` (por defecto, toda la zona de la colina).
+  function isGoalCell(pid, r, c){ return goalCells(pid).some(g=> g.r===r && g.c===c); }
+  function distanceToGoal(pid, r, c, blockedSet){ return distanceToHill(r, c, blockedSet, goalCells(pid)); }
+  // ¿le queda camino a la meta? (centro o fila opuesta)
+  function playerHasPath(p, blockedSet){
+    if(state.goalMode==='rows') return hasPath(p.r,p.c,0,0,blockedSet,state.size,goalCells(p.id));
+    return hasPath(p.r,p.c,state.objective.r,state.objective.c,blockedSet,state.size);
+  }
+  // pid es opcional: en el Clásico oficial hace falta saber de quién es la meta (si no viene, se deduce de quién está en esa casilla).
+  function distanceToCenter(r, c, blockedSet, pid){
+    if(state.goalMode==='rows'){
+      if(pid==null) pid = state.players.findIndex(pl=> pl.r===r && pl.c===c);
+      if(pid>=0) return distanceToGoal(pid, r, c, blockedSet);
+    }
+    const size=state.size, cen=centerGoal(), start=r*size+c;
+    if(start===cen) return 0;
+    if(blockedSet===state.blockedEdges){
+      const v = liveDistMap(blockedSet,size,'c',[cen])[start];
+      return v<0 ? Infinity : v;
+    }
+    return bfsToGoal(edgeMaskFor(blockedSet,size),size,start,cen,null);
+  }
+  // Pasos hasta la casilla más cercana de `targets` (por defecto, toda la zona de la colina).
   function distanceToHill(r,c,blockedSet,targets){
-    const goals = new Set((targets || hillCells()).map(t=> t.r+','+t.c));
-    if(goals.has(r+','+c)) return 0;
-    const visited = new Set([r+','+c]);
-    const queue = [[r,c,0]];
-    for(let head=0; head<queue.length; head++){
-      const [cr,cc,d] = queue[head];
-      for(const [dr,dc] of DIRS4){
-        const nr=cr+dr, nc=cc+dc;
-        if(nr<0||nc<0||nr>=state.size||nc>=state.size) continue;
-        const key = nr+','+nc;
-        if(visited.has(key)) continue;
-        if(isBlocked(cr,cc,nr,nc,blockedSet)) continue;
-        if(goals.has(key)) return d+1;
-        visited.add(key);
-        queue.push([nr,nc,d+1]);
-      }
+    const size=state.size, goals=hillGoalIdx(targets), start=r*size+c;
+    if(goals.indexOf(start)>=0) return 0;
+    if(blockedSet===state.blockedEdges){
+      const sig = 'h:' + goals.slice().sort((a,b)=>a-b).join(',');
+      const v = liveDistMap(blockedSet,size,sig,goals)[start];
+      return v<0 ? Infinity : v;
     }
-    return Infinity;
+    const flags = new Uint8Array(size*size);
+    goals.forEach(g=>{ flags[g]=1; });
+    return bfsToGoal(edgeMaskFor(blockedSet,size),size,start,-1,flags);
   }
   // Casillas de la zona que no ocupa ningún otro jugador (si están todas ocupadas, toda la zona).
   function hillFreeTargets(excludeIdx){
@@ -649,28 +848,49 @@
     }
     return [[r,c,r,c+1],[r+1,c,r+1,c+1]];
   }
-  function canPlaceWallSlot(r,c,orientation,occupiedGrid){
+  // Por qué no entra una pared en esa ranura (67): null si entra.
+  //  'bounds' fuera del tablero · 'overlap' se solapa con otra del mismo sentido · 'cross' cruza una pared en X
+  function wallSlotReason(r,c,orientation,occupiedGrid){
     const occ = occupiedGrid || state.occupied;
-    if(r<0||c<0||r>state.size-2||c>state.size-2) return false;
-    if(occ[r][c]) return false;
+    if(r<0||c<0||r>state.size-2||c>state.size-2) return 'bounds';
+    if(occ[r][c]) return occ[r][c]===orientation ? 'overlap' : 'cross';
     if(orientation==='h'){
-      if(c>0 && occ[r][c-1]==='h') return false;
-      if(c<state.size-2 && occ[r][c+1]==='h') return false;
+      if(c>0 && occ[r][c-1]==='h') return 'overlap';
+      if(c<state.size-2 && occ[r][c+1]==='h') return 'overlap';
     } else {
-      if(r>0 && occ[r-1][c]==='v') return false;
-      if(r<state.size-2 && occ[r+1][c]==='v') return false;
+      if(r>0 && occ[r-1][c]==='v') return 'overlap';
+      if(r<state.size-2 && occ[r+1][c]==='v') return 'overlap';
+    }
+    return null;
+  }
+  function canPlaceWallSlot(r,c,orientation,occupiedGrid){
+    return wallSlotReason(r,c,orientation,occupiedGrid)===null;
+  }
+  const ERROR_VIBRATION = [20,40,20];
+  // Texto para hintLine de cada motivo de rechazo. 'noWalls' lo agrega la capa de jugada (no es de la ranura).
+  function wallReasonText(reason){
+    switch(reason){
+      case 'overlap':   return 'Esa pared se solapa con otra.';
+      case 'cross':     return 'Esa pared cruza otra pared.';
+      case 'noPath':    return 'No se puede: dejaría a un jugador sin camino a la meta.';
+      case 'noWalls':   return 'No te quedan paredes.';
+      case 'bounds':    return 'Esa pared queda fuera del tablero.';
+      case 'mirror':    return 'No se puede: el reflejo de esa pared (modo Espejo) no entra.';
+      case 'hillSiege': return `No se puede cerrar la zona: tiene que quedar con al menos ${HILL_MIN_ACCESSES} accesos.`;
+      default:          return null;
     }
     return true;
   }
   // occupiedGrid/blockedBase opcionales: permiten evaluar contra un conocimiento parcial (niebla de guerra)
   // en lugar del estado real completo. El commit siempre valida con el estado real (sin overrides).
   function evaluateWallPlacement(r,c,orientation,occupiedGrid,blockedBase){
-    if(!canPlaceWallSlot(r,c,orientation,occupiedGrid)) return { valid:false };
+    const why = wallSlotReason(r,c,orientation,occupiedGrid);
+    if(why) return { valid:false, reason:why };
     const edges = wallEdges(r,c,orientation);
     const testSet = new Set(blockedBase || state.blockedEdges);
     for(const e of edges) testSet.add(edgeKey(e[0],e[1],e[2],e[3]));
     for(const p of state.players){
-      if(!hasPath(p.r,p.c,state.objective.r,state.objective.c,testSet,state.size)) return { valid:false };
+      if(!playerHasPath(p,testSet)) return { valid:false, reason:'noPath' };
     }
     return { valid:true, edges };
   }
@@ -682,39 +902,8 @@
     if(viewerIdx==null) return evaluateWallForMode(r,c,orientation);
     return evaluateWallPlacement(r,c,orientation, visibleOccupiedFor(viewerIdx), visibleBlockedEdgesFor(viewerIdx));
   }
-  // ---------- Modo Espejo: valida y arma también la(s) pared(es) reflejada(s) ----------
-  // Reflejo puntual (180°, giro de media vuelta): usado con 2 jugadores. Misma orientación.
+  // ---------- Modo Espejo: valida y arma también la pared reflejada ----------
   function mirrorSlot(r,c){ return { r: state.size-2-r, c: state.size-2-c }; }
-  // Un cuarto de vuelta (90° en sentido horario) de una ranura de pared: la posición gira y la orientación
-  // se intercambia (horizontal<->vertical). Aplicado dos veces da exactamente mirrorSlot (ver mirrorSlots).
-  function rotateSlot90(r,c){ return { r:c, c: state.size-2-r }; }
-  // Las 3 copias giradas en cuartos de vuelta (90°,180°,270°) de una pared, cada una con su orientación.
-  // Con 4 jugadores se usan las 3; con 2, sólo la de 180° (que coincide con mirrorSlot).
-  function mirrorSlots(r,c,orientation){
-    const copies = [];
-    let cur = { r, c, orientation };
-    for(let k=0;k<3;k++){
-      const rot = rotateSlot90(cur.r, cur.c);
-      cur = { r: rot.r, c: rot.c, orientation: cur.orientation==='h' ? 'v' : 'h' };
-      copies.push(cur);
-    }
-    return copies;
-  }
-  // Copias que hacen falta para esta pared (dedupeadas entre sí y contra el original): con 4 jugadores, las 3
-  // rotaciones de cuarto de vuelta; con 2, sólo la de 180°. La usan tanto la validación real (evaluateWallForMode)
-  // como el preview (25), para que nunca puedan quedar desincronizados.
-  function mirrorNeededCopies(r,c,orientation){
-    const rotCopies = mirrorSlots(r,c,orientation);                 // [90°,180°,270°]
-    const need = state.players.length>=4 ? rotCopies : [rotCopies[1]];  // 2 jugadores: sólo 180°
-    const seen = new Set([r+','+c+','+orientation]);
-    const uniq = [];
-    for(const m of need){
-      const k = m.r+','+m.c+','+m.orientation;
-      if(seen.has(k)) continue;              // coincide con el original o con otra copia ya contada
-      seen.add(k); uniq.push(m);
-    }
-    return uniq;
-  }
   function evaluateWallForMode(r,c,orientation){
     const base = evaluateWallPlacement(r,c,orientation);
     if(!base.valid) return base;
@@ -728,22 +917,18 @@
       return base;
     }
     if(state.ruleset!=='mirror') return base;
-    const uniq = mirrorNeededCopies(r,c,orientation);
-    if(!uniq.length) return base;            // cae en su propio reflejo, no hace falta espejo aparte
-    for(const m of uniq){
-      if(!canPlaceWallSlot(m.r,m.c,m.orientation)) return { valid:false, reason:'mirrorClash' };
-    }
+    const m = mirrorSlot(r,c);
+    if(m.r===r && m.c===c) return base; // cae en su propio reflejo, no hace falta espejo aparte
+    if(!canPlaceWallSlot(m.r,m.c,orientation)) return { valid:false, reason:'mirror' };
+    const mEdges = wallEdges(m.r,m.c,orientation);
     const testSet = new Set(state.blockedEdges);
     base.edges.forEach(e=> testSet.add(edgeKey(e[0],e[1],e[2],e[3])));
-    const mirrorCopies = uniq.map(m=> ({ r:m.r, c:m.c, orientation:m.orientation, edges: wallEdges(m.r,m.c,m.orientation) }));
-    mirrorCopies.forEach(mc=> mc.edges.forEach(e=> testSet.add(edgeKey(e[0],e[1],e[2],e[3]))));
+    mEdges.forEach(e=> testSet.add(edgeKey(e[0],e[1],e[2],e[3])));
     for(const p of state.players){
-      if(!hasPath(p.r,p.c,state.objective.r,state.objective.c,testSet,state.size)) return { valid:false, reason:'mirrorBlocks', blockedPlayer:p };
+      if(!playerHasPath(p,testSet)) return { valid:false, reason:'noPath' };
     }
-    const mirrorEdges = mirrorCopies.reduce((a,mc)=> a.concat(mc.edges), []);   // compatibilidad: lista plana
-    return { valid:true, edges:base.edges, mirrorEdges, mirrorCopies };
+    return { valid:true, edges:base.edges, mirrorEdges:mEdges };
   }
-  function mirrorWallCost(){ return state.ruleset==='mirror' ? MIRROR_CFG.cost : 1; }
 
   // ---------- Modo Rey de la colina: zona central proporcional al tablero ----------
   // La zona son las casillas a distancia Manhattan <= radio del centro: radio 1 (cruz de 5 casillas)
@@ -812,6 +997,7 @@
     return p.hillTurns >= hillTargetTurns();
   }
   function checkWinAfterMove(p){
+    if(state.goalMode==='rows') return isGoalCell(p.id, p.r, p.c);   // Clásico oficial: cualquier casilla del lado opuesto
     if(state.teams){
       if(p.r!==state.objective.r || p.c!==state.objective.c) return false;
       p.arrived = true;
@@ -887,6 +1073,7 @@
     localState.occupied[r][c] = orientation;
     edges.forEach(e=> localState.blockedEdges.add(edgeKey(e[0],e[1],e[2],e[3])));
     localState.walls.push({ r, c, orientation, color:'var(--line)', env:true });
+    edgesEpoch++;
     return true;
   }
   // ---------- Laberinto: patrones, transformaciones, equidad y semilla ----------
@@ -918,14 +1105,28 @@
   ];
 
   function mulberry32(a){
-    return function(){
+    const f = function(){
       a |= 0; a = a + 0x6D2B79F5 | 0;
       let t = Math.imul(a ^ a >>> 15, 1 | a);
       t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
       return ((t ^ t >>> 14) >>> 0) / 4294967296;
     };
+    f.getState = ()=> a >>> 0;            // el estado es un solo entero de 32 bits: se puede guardar y retomar
+    f.setState = v=>{ a = v | 0; };
+    return f;
   }
   function newMazeSeed(){ return Math.floor(Math.random()*SEED_SPACE); }
+  // Aleatoriedad de la partida (71): todo lo que influye en el juego (IA, poderes, sorteos) sale de rng().
+  // Los efectos puramente visuales (confeti, estrellas), la pausa de «pensando…» y el cofre diario
+  // siguen con Math.random: no cambian el resultado de una partida.
+  let gameSeed = 1;
+  let gameRng = mulberry32(1);
+  function rng(){ return gameRng(); }
+  function seedGame(seed){
+    gameSeed = (+seed >>> 0);
+    gameRng = mulberry32(gameSeed);
+    return gameSeed;
+  }
   function seedToText(n){ return (n>>>0).toString(36).toUpperCase().padStart(6,'0'); }
   function seedFromText(t){
     const n = parseInt(String(t||'').trim().toLowerCase(), 36);
@@ -1364,6 +1565,13 @@
   }
 
   function advanceTurn(){
+    clearHintMarks();
+    // Regla del pastel (62): al cerrarse la jugada de apertura se abre la ventana para que el segundo cambie de lado;
+    // cualquier otra acción (o el cambio mismo) la cierra.
+    if(state.pie && !state.pie.resolved){
+      if(!state.pie.open && state.pie.actions===0){ state.pie.actions = 1; state.pie.open = true; }
+      else { state.pie.open = false; state.pie.resolved = true; }
+    }
     const n = state.players.length;
     let next = state.currentPlayerIndex;
     for(let i=0;i<n;i++){
@@ -1380,7 +1588,7 @@
     if(state.ruleset==='party') partyOnTurnStart(next, prevIndex);
     state.validMoves = computeValidMoves(next);
     const cpNext = state.players[next];
-    mode = (!state.validMoves.length && cpNext.wallsLeft>=mirrorWallCost() && !cpNext.isCPU) ? 'wall' : 'move';
+    mode = (!state.validMoves.length && cpNext.wallsLeft>0 && !cpNext.isCPU) ? 'wall' : 'move';
     tickFogEchoes();
     // Niebla de guerra con 2+ humanos en el mismo dispositivo: al pasar a otro humano, lo que reveló quien
     // jugó antes anularía la niebla si se ve directo. Cortina "pasá el celular" hasta que el próximo confirme.
@@ -1388,6 +1596,92 @@
       && state.players.filter(pl=> !pl.isCPU).length>=2){
       queueHandoff(cpNext);
     }
+  }
+
+  // ---------- Regla del pastel (62) ----------
+  // Tras la jugada de apertura, el segundo puede cambiar de lado: toma la posición, las paredes que le quedan y la meta
+  // del que abrió (que pasa a ocupar su lugar). Cambiar gasta el turno del segundo; quien abrió juega a continuación.
+  function pieSwap(){
+    if(!state || !state.pie || !state.pie.open || state.winner) return false;
+    const cur = state.players[state.currentPlayerIndex], opener = state.players[state.firstIdx];
+    if(!cur || !opener || cur===opener) return false;
+    [cur.r, opener.r] = [opener.r, cur.r];
+    [cur.c, opener.c] = [opener.c, cur.c];
+    [cur.wallsLeft, opener.wallsLeft] = [opener.wallsLeft, cur.wallsLeft];
+    if(state.goalSides){ const t = state.goalSides[cur.id]; state.goalSides[cur.id] = state.goalSides[opener.id]; state.goalSides[opener.id] = t; }
+    const ss = state.startSeat; [ss[cur.id], ss[opener.id]] = [ss[opener.id], ss[cur.id]];
+    state.pie.open = false; state.pie.resolved = true; state.pie.swapped = true;
+    showToast(`🥧 ${escapeHtml(cur.name)} cambió de lado con ${escapeHtml(opener.name)}.`);
+    playToggleSound(true);
+    hideWallPreview(); previewSlot = null;
+    advanceTurn();
+    render();
+    return true;
+  }
+  // La IA sólo cambia si quien abrió quedó adelante, con más o menos ganas según su dificultad.
+  function botMaybePie(idx){
+    if(!state || !state.pie || !state.pie.open || state.winner) return false;
+    const me = state.players[idx], opener = state.players[state.firstIdx];
+    if(!me || me===opener) return false;
+    const ahead = distanceToCenter(me.r, me.c, state.blockedEdges, me.id) - distanceToCenter(opener.r, opener.c, state.blockedEdges, opener.id);
+    const chance = { easy:0.25, normal:0.5, hard:0.85, expert:1 }[me.difficulty] || 0.25;
+    return ahead>0 && Math.random()<chance && pieSwap();
+  }
+  pieBtn.addEventListener('click', ()=>{ if(state && state.pie && state.pie.open) pieSwap(); });
+
+  // Botones auxiliares de la partida (pastel y pista): sólo se ven cuando corresponden.
+  function updateAuxButtons(){
+    if(!state) return;
+    const cp = state.players[state.currentPlayerIndex];
+    const humanTurn = !!cp && !cp.isCPU && !state.winner;
+    const pieShow = !!(state.pie && state.pie.open) && humanTurn;
+    pieBtn.classList.toggle('hidden', !pieShow);
+    auxToggle.classList.toggle('hidden', !pieShow);
+  }
+
+  // ---------- Ayuda de distancia (65): fichas "Tú 5 · Rival 6" ----------
+  // Distancia en pasos hasta la meta de cada jugador, según el modo (centro, lado opuesto, zona o, para los
+  // cazadores, el fugitivo). En niebla de guerra sólo se muestra la propia, calculada con lo que se ve.
+  function helpDist(i, edges){
+    const pl = state.players[i];
+    if(pl.arrived) return 0;
+    if(state.ruleset==='hill') return distanceToHill(pl.r, pl.c, edges, hillFreeTargets(i));
+    if(state.ruleset==='hunter' && i!==state.fugitiveIdx){
+      const f = state.players[state.fugitiveIdx];
+      return bfsShortestPath(pl.r, pl.c, f.r, f.c, edges, state.size);
+    }
+    return distanceToCenter(pl.r, pl.c, edges, i);
+  }
+  function fmtDist(d){ return isFinite(d) ? String(d) : '∞'; }
+  function updateDistChips(previewEdges){
+    if(!distChipsEl) return;
+    const on = distHelpOn && !!state && !state.winner;
+    distChipsEl.classList.toggle('hidden', !on);
+    if(!on){ distChipsEl.innerHTML = ''; return; }
+    const fog = state.ruleset==='fog';
+    const viewer = fog ? fogViewerIndex() : null;
+    const base = (fog && viewer!=null) ? visibleBlockedEdgesFor(viewer) : state.blockedEdges;
+    let after = null;
+    if(previewEdges){
+      after = new Set(base);
+      previewEdges.forEach(e=>{ if(!state.blockedEdges.has(e)) after.add(e); });
+    }
+    const cpuGame = !!state.isCpuGame && state.players.length===2;
+    const chips = [];
+    state.players.forEach((pl,i)=>{
+      const label = cpuGame ? (pl.isCPU ? 'Rival' : 'Tú') : pl.name;
+      let val;
+      if(fog && viewer!=null && i!==viewer) val = '?';
+      else {
+        const b = helpDist(i, base);
+        val = fmtDist(b);
+        if(after){ const a = helpDist(i, after); if(a!==b) val += ' → ' + fmtDist(a); }
+      }
+      const cur = (i===state.currentPlayerIndex) ? ' active' : '';
+      chips.push(`<span class="dist-chip${cur}" style="--pc:${pl.color}"><i class="dist-dot"></i>${escapeHtml(label)} <b>${val}</b></span>`);
+    });
+    distChipsEl.innerHTML = chips.join('<span class="dist-sep">·</span>');
+    distChipsEl.setAttribute('aria-label', 'Pasos que le faltan a cada jugador');
   }
 
   // ---------- overlays genéricos ----------
@@ -1422,47 +1716,6 @@
     openOverlay('handoff');
   }
   handoffReadyBtn.addEventListener('click', ()=> closeOverlay('handoff'));
-  // Espejo (24): sorteo animado de quién abre. La decisión ya está tomada y aplicada al estado antes de
-  // llamar a esto — la animación es puramente cosmética y nunca puede dejar la partida en un estado distinto
-  // del que ya tiene. Pausa el temporizador de la IA a mano (no confía en el chequeo interno de openOverlay,
-  // que en algunos puntos de entrada corre antes de que gameScreen deje de estar oculto).
-  let mirrorCoinFlicker = null, mirrorCoinTimer1 = null, mirrorCoinTimer2 = null;
-  function runMirrorCoinToss(openerIdx, bonus){
-    invalidateBotTimer();
-    clearTurnTimer();
-    if(mirrorCoinFlicker){ clearInterval(mirrorCoinFlicker); mirrorCoinFlicker=null; }
-    if(mirrorCoinTimer1){ clearTimeout(mirrorCoinTimer1); mirrorCoinTimer1=null; }
-    if(mirrorCoinTimer2){ clearTimeout(mirrorCoinTimer2); mirrorCoinTimer2=null; }
-    const opener = state.players[openerIdx], other = state.players[1-openerIdx];
-    const paint = (p)=>{ mirrorCoinEl.style.background = p.color; mirrorCoinEl.textContent = String(p.id+1); };
-    const reveal = ()=>{
-      mirrorCoinEl.classList.remove('tossing');
-      paint(opener);
-      mirrorCoinText.innerHTML = `Abre <b>${escapeHtml(opener.name)}</b>.`
-        + (bonus>0 ? ` ${escapeHtml(other.name)} recibe +${bonus} pared${bonus===1?'':'es'} de compensación.` : '');
-      mirrorCoinBtn.disabled = false;
-    };
-    mirrorCoinBtn.disabled = true;
-    mirrorCoinText.textContent = 'Sorteando quién abre…';
-    if(window.__QUORIDOR_TEST__){
-      // en pruebas: sin animación real (nada de setInterval/setTimeout de por medio), resultado inmediato
-      openOverlay('mirrorCoin');
-      reveal();
-      closeOverlay('mirrorCoin');
-      return;
-    }
-    paint(state.players[0]);
-    mirrorCoinEl.classList.add('tossing');
-    openOverlay('mirrorCoin');
-    let tick = 0;
-    mirrorCoinFlicker = setInterval(()=>{ tick++; paint(tick%2===0 ? state.players[0] : state.players[1]); }, 110);
-    mirrorCoinTimer1 = setTimeout(()=>{
-      clearInterval(mirrorCoinFlicker); mirrorCoinFlicker=null;
-      reveal();
-      mirrorCoinTimer2 = setTimeout(()=> closeOverlay('mirrorCoin'), 1000);
-    }, 1000);
-  }
-  mirrorCoinBtn.addEventListener('click', ()=>{ if(!mirrorCoinBtn.disabled) closeOverlay('mirrorCoin'); });
   function closeTopOverlay(){
     if(!overlayStack.length) return false;
     closeOverlay(overlayStack[overlayStack.length-1]);
@@ -1470,8 +1723,9 @@
   }
 
   // ---------- confirmación reutilizable (reinicio/salir/borrar stats) ----------
-  function showConfirm(message, onConfirm){
+  function showConfirm(message, onConfirm, yesLabel){
     confirmMessage.textContent = message;
+    confirmYesBtn.textContent = yesLabel || 'Sí, continuar';
     pendingConfirmAction = onConfirm;
     openOverlay('confirm');
   }
@@ -1513,6 +1767,9 @@
     return !legacyMuted;
   })();
   let showMovesOn = readPref('quoridor_showMoves')!=='0';
+  let distHelpOn = readPref('quoridor_distHelp')==='1';      // 65: fichas "Tú 5 · Rival 6" (apagada por defecto)
+  let lotteryOn = readPref('quoridor_lottery')!=='0';        // 62: sorteo de quién abre (encendido por defecto)
+  let pieOn = readPref('quoridor_pie')==='1';                // 62: regla del pastel en partidas de 2 (apagada por defecto)
   let glassOn = (function(){
     const v = readPref('quoridor_glass');
     if(v!==null) return v==='1';
@@ -1670,8 +1927,8 @@
       osc.stop(ctx.currentTime + duration);
     }catch(e){}
   }
-  function playMoveSound(){ playSfx('tap', ()=> playTone(440, 0.09, 'sine', 0.14)); }
-  function playWallSound(){ playSfx('wall', ()=> playTone(170, 0.15, 'square', 0.15)); }
+  function playMoveSound(){ if(HEADLESS) return; playSfx('tap', ()=> playTone(440, 0.09, 'sine', 0.14)); }
+  function playWallSound(){ if(HEADLESS) return; playSfx('wall', ()=> playTone(170, 0.15, 'square', 0.15)); }
   function playUiClick(){ playSfx('click', ()=> playTone(660, 0.04, 'sine', 0.07)); }
   function playToggleSound(on){ playSfx(on ? 'on' : 'off', ()=> playTone(on ? 720 : 520, 0.05, 'sine', 0.08)); }
   function playWinSound(){
@@ -1684,6 +1941,7 @@
     setTimeout(()=> playTone(1319, 0.18, 'square', 0.08), 80);
   }
   function vibrate(pattern){
+    if(HEADLESS) return;
     if(!vibrateOn) return;
     try{ if(navigator.vibrate) navigator.vibrate(pattern); }catch(e){}
   }
@@ -1702,15 +1960,17 @@
     return {
       totalGames:0, winsBySlot:[0,0,0,0], streak:{slot:null,count:0}, vsCpu:{played:0,won:0},
       vsCpuHardWon:0, vsCpuNormalWon:0, winsWith4:0,
-      modesPlayed:{ fog:0, teams:0, party:0, maze:0, blitz:0, mirror:0, hill:0, hunter:0 },
-      modeWins:{ fog:0, teams:0, party:0, maze:0, blitz:0, mirror:0, hill:0, hunter:0 },
+      modesPlayed:{ official:0, fog:0, teams:0, party:0, maze:0, blitz:0, mirror:0, hill:0, hunter:0 },
+      modeWins:{ official:0, fog:0, teams:0, party:0, maze:0, blitz:0, mirror:0, hill:0, hunter:0 },
       sizeWins:{5:0,7:0,9:0,11:0},
       noWallWins:0, allWallsUsedWins:0,
       fastestWinMoves:null, longestGameMoves:0, totalWallsPlaced:0,
-      daily:{ lastDate:null, streak:0, bestStreak:0, completedCount:0, bestMoves:{} },
+      daily:{ lastDate:null, streak:0, bestStreak:0, completedCount:0, bestMoves:{}, history:{}, shielded:{}, shields:0, shieldsUsed:0 },
       customLevelsPlayed:0, skinsCustomized:false, partyStuns:0,
       hunterCaptures:0, hunterEscapes:0,
+      seat:{},
       achievementsUnlocked:[],
+      recentVsCpu:[],
     };
   }
   function loadStats(){
@@ -1736,12 +1996,18 @@
         base.totalWallsPlaced = parsed.totalWallsPlaced || 0;
         base.daily = Object.assign(base.daily, parsed.daily||{});
         base.daily.bestMoves = Object.assign({}, parsed.daily && parsed.daily.bestMoves);
+        base.daily.history = Object.assign({}, parsed.daily && parsed.daily.history);
+        base.daily.shielded = Object.assign({}, parsed.daily && parsed.daily.shielded);
+        base.daily.shields = Math.max(0, Math.min(DAILY_SHIELD_MAX, +base.daily.shields || 0));
+        base.daily.shieldsUsed = Math.max(0, +base.daily.shieldsUsed || 0);
         base.customLevelsPlayed = parsed.customLevelsPlayed || 0;
         base.skinsCustomized = !!parsed.skinsCustomized;
         base.partyStuns = parsed.partyStuns || 0;
         base.hunterCaptures = parsed.hunterCaptures || 0;
         base.hunterEscapes = parsed.hunterEscapes || 0;
+        base.seat = (parsed.seat && typeof parsed.seat==='object') ? parsed.seat : {};
         base.achievementsUnlocked = Array.isArray(parsed.achievementsUnlocked) ? parsed.achievementsUnlocked : [];
+        base.recentVsCpu = Array.isArray(parsed.recentVsCpu) ? parsed.recentVsCpu.slice(-5).map(v=> v?1:0) : [];
       }
     }catch(e){}
     return base;
@@ -1757,6 +2023,10 @@
     else { statsData.streak.slot = winnerSlot; statsData.streak.count = 1; }
     if(summary.isCpuGame){
       statsData.vsCpu.played += 1;
+      if(!summary.campaign){
+        statsData.recentVsCpu = (statsData.recentVsCpu||[]).concat(winnerSlot===0 ? 1 : 0).slice(-5);
+        if(summary.adaptive) updateAdaptiveAfterGame();
+      }
       if(winnerSlot === 0){
         statsData.vsCpu.won += 1;
         if(summary.cpuDifficulty==='hard' || summary.cpuDifficulty==='expert') statsData.vsCpuHardWon += 1;
@@ -1777,6 +2047,14 @@
       statsData.longestGameMoves = summary.totalMovesThisGame;
     }
     statsData.totalWallsPlaced += (summary.wallsPlacedThisGame||0);
+    if(summary.seatInfo){
+      // medición por asiento (62): cuántas veces ganó quien abrió y cuántas cada asiento, por modo y cantidad de jugadores
+      const k = summary.ruleset+':'+summary.playersCount;
+      const sd = statsData.seat[k] || (statsData.seat[k] = { games:0, firstWins:0, bySeat:[0,0,0,0] });
+      sd.games += 1;
+      if(summary.seatInfo.winnerSeat===summary.seatInfo.firstIdx) sd.firstWins += 1;
+      sd.bySeat[summary.seatInfo.winnerSeat] = (sd.bySeat[summary.seatInfo.winnerSeat]||0) + 1;
+    }
     if(summary.capturedByHuman) statsData.hunterCaptures += 1;   // capturas hechas por un cazador humano (para logros propios)
     if(summary.escapedByHuman) statsData.hunterEscapes += 1;     // escapes de un fugitivo humano
     saveStats();
@@ -1787,21 +2065,43 @@
     statsData.modesPlayed[ruleset] = (statsData.modesPlayed[ruleset]||0) + 1;
     saveStats();
   }
-  function recordDailyResult(movesUsed, par){
-    const today = todayKey();
+  // Registra un desafío resuelto de la fecha `dateKey` (la del desafío que se jugó, no la de «ahora»).
+  // Devuelve cómo quedó la racha: si hubo días protegidos por escudo y si se ganó uno nuevo.
+  function recordDailyResult(dateKey, movesUsed, par, info){
+    info = info || {};
     const d = statsData.daily;
-    const isFirstToday = d.lastDate !== today;
-    if(isFirstToday){
-      const yesterday = todayKey(-1);
-      d.streak = (d.lastDate === yesterday) ? d.streak + 1 : 1;
-      d.bestStreak = Math.max(d.bestStreak, d.streak);
+    const isFirst = !isDailyDone(d, dateKey);
+    const out = { firstToday:isFirst, protectedDays:[], earnedShield:false, shieldCapped:false, broken:false };
+    if(isFirst){
       d.completedCount += 1;
-      d.lastDate = today;
+      if(!d.lastDate || dayKeyDiff(d.lastDate, dateKey) > 0){     // sólo si es más nuevo que el último día resuelto
+        if(!d.lastDate){ d.streak = 1; }
+        else {
+          const gap = dayKeyDiff(d.lastDate, dateKey), missed = gap-1;
+          if(missed<=0){ d.streak += 1; }
+          else if(missed <= (d.shields||0)){                       // los escudos cubren todos los días perdidos
+            for(let i=1;i<=missed;i++){ const k = dayKeyAdd(d.lastDate, i); d.shielded[k] = true; out.protectedDays.push(k); }
+            d.shields -= missed; d.shieldsUsed = (d.shieldsUsed||0) + missed;
+            d.streak += 1;
+          } else { out.broken = d.streak>0; d.streak = 1; }        // no alcanzan: se corta
+        }
+        d.lastDate = dateKey;
+        d.bestStreak = Math.max(d.bestStreak, d.streak);
+        if(d.streak % DAILY_SHIELD_EVERY === 0){
+          if((d.shields||0) < DAILY_SHIELD_MAX){ d.shields = (d.shields||0) + 1; out.earnedShield = true; }
+          else out.shieldCapped = true;
+        }
+      }
     }
-    if(d.bestMoves[today]==null || movesUsed < d.bestMoves[today]) d.bestMoves[today] = movesUsed;
+    const prev = d.history[dateKey];
+    if(!prev || movesUsed < prev.moves){
+      d.history[dateKey] = { moves:movesUsed, par, stars:info.stars||0, mode:info.mode||null, size:info.size||null, timeouts:info.timeouts||0 };
+    }
+    if(d.bestMoves[dateKey]==null || movesUsed < d.bestMoves[dateKey]) d.bestMoves[dateKey] = movesUsed;
     saveStats();
     const fresh = checkAchievements({ toast:false });
-    return { firstToday:isFirstToday, streak:d.streak, fresh };
+    out.streak = d.streak; out.shields = d.shields; out.fresh = fresh;
+    return out;
   }
   function recordSkinCustomized(){
     if(statsData.skinsCustomized) return;
@@ -1821,43 +2121,325 @@
 
   // ---------- billetera (monedas e inventario): clave propia, no se borra con "Reiniciar estadísticas" ----------
   const WALLET_KEY = 'quoridor_wallet';
-  const WALLET_VERSION = 1;
-  function defaultWallet(){
+  const WALLET_BAK_KEY = 'quoridor_wallet_bak';
+  const WALLET_VERSION = 2;
+  const WALLET_SALT = 'qdr-w4ll3t-s4l-v2';        // sal del hash: va en el código, así que sólo frena ediciones casuales
+  const COIN_SANITY_MAX = 50000;                  // más que esto no se puede haber juntado jugando
+  const LEGACY_COIN_MAX = 5000;                   // billeteras viejas (sin firma) con más monedas se consideran alteradas
+
+  // ---------- 140 · integridad: SHA-256 sincrónico + firma con sal ----------
+  const sha256Hex = (function(){
+    const K = [], H0 = [];
+    let n = 0;
+    for(let c=2; n<64; c++){
+      let prime = true;
+      for(let d=2; d*d<=c; d++){ if(c%d===0){ prime = false; break; } }
+      if(!prime) continue;
+      if(n<8) H0[n] = (Math.pow(c, 1/2) % 1) * 4294967296 | 0;
+      K[n++] = (Math.pow(c, 1/3) % 1) * 4294967296 | 0;
+    }
+    const rotr = (x, s)=> (x>>>s) | (x<<(32-s));
+    return function(str){
+      const b = new TextEncoder().encode(str), len = b.length;
+      const total = ((len + 9 + 63) >> 6) << 6;
+      const buf = new Uint8Array(total);
+      buf.set(b); buf[len] = 0x80;
+      const dv = new DataView(buf.buffer);
+      dv.setUint32(total-8, Math.floor(len*8 / 4294967296));
+      dv.setUint32(total-4, (len*8) >>> 0);
+      const h = H0.slice(), w = new Array(64);
+      for(let o=0; o<total; o+=64){
+        for(let i=0;i<16;i++) w[i] = dv.getUint32(o + i*4);
+        for(let i=16;i<64;i++){
+          const s0 = rotr(w[i-15],7) ^ rotr(w[i-15],18) ^ (w[i-15]>>>3);
+          const s1 = rotr(w[i-2],17) ^ rotr(w[i-2],19) ^ (w[i-2]>>>10);
+          w[i] = (w[i-16] + s0 + w[i-7] + s1) | 0;
+        }
+        let a=h[0], bb=h[1], c=h[2], d=h[3], e=h[4], f=h[5], g=h[6], hh=h[7];
+        for(let i=0;i<64;i++){
+          const S1 = rotr(e,6) ^ rotr(e,11) ^ rotr(e,25), ch = (e&f) ^ (~e&g);
+          const t1 = (hh + S1 + ch + K[i] + w[i]) | 0;
+          const S0 = rotr(a,2) ^ rotr(a,13) ^ rotr(a,22), mj = (a&bb) ^ (a&c) ^ (bb&c);
+          const t2 = (S0 + mj) | 0;
+          hh=g; g=f; f=e; e=(d+t1)|0; d=c; c=bb; bb=a; a=(t1+t2)|0;
+        }
+        h[0]=(h[0]+a)|0; h[1]=(h[1]+bb)|0; h[2]=(h[2]+c)|0; h[3]=(h[3]+d)|0;
+        h[4]=(h[4]+e)|0; h[5]=(h[5]+f)|0; h[6]=(h[6]+g)|0; h[7]=(h[7]+hh)|0;
+      }
+      return h.map(x=> (x>>>0).toString(16).padStart(8,'0')).join('');
+    };
+  })();
+  function stableStringify(v){
+    if(v===null || typeof v!=='object') return JSON.stringify(v);
+    if(Array.isArray(v)) return '[' + v.map(stableStringify).join(',') + ']';
+    return '{' + Object.keys(v).sort().map(k=> JSON.stringify(k) + ':' + stableStringify(v[k])).join(',') + '}';
+  }
+  function sealOf(body){ return sha256Hex(WALLET_SALT + '|' + stableStringify(body) + '|' + WALLET_SALT); }
+  // 'ok' firma válida · 'legacy' sin firma de una versión vieja · 'bad' firma que no coincide · 'none' no hay nada
+  function checkSeal(raw){
+    if(!raw || typeof raw!=='object') return 'none';
+    if(typeof raw.sig!=='string') return (raw.v||1) < 2 ? 'legacy' : 'bad';
+    const body = Object.assign({}, raw); delete body.sig;
+    return sealOf(body) === raw.sig ? 'ok' : 'bad';
+  }
+  function signed(obj){
+    const body = JSON.parse(JSON.stringify(obj));    // ida y vuelta por JSON: lo mismo que se va a leer después
+    delete body.sig;
+    body.sig = sealOf(body);
+    return JSON.stringify(body);
+  }
+  // Si la app corre dentro de Android, el saldo vive en preferencias nativas (AndroidWallet.getWallet/setWallet) y
+  // localStorage queda de espejo. En el navegador se usa sólo localStorage.
+  function walletRead(){
+    try{
+      if(window.AndroidWallet && typeof window.AndroidWallet.getWallet==='function'){
+        const s = window.AndroidWallet.getWallet();
+        if(s) return JSON.parse(s);
+      }
+    }catch(e){}
+    try{ return JSON.parse(localStorage.getItem(WALLET_KEY) || 'null'); }catch(e){ return null; }
+  }
+  function walletBackupRead(){
+    try{ return JSON.parse(localStorage.getItem(WALLET_BAK_KEY) || 'null'); }catch(e){ return null; }
+  }
+  let walletTamperNotice = false;
+  function defaultWallet(isNew){
     return {
       v: WALLET_VERSION, coins: 0,
-      owned: { e_faceHappy:1, e_laugh:1, fr_f1:1 },
-      equipped: { emotes:['faceHappy','laugh',null,null], frame:'f1' },
+      owned: { e_faceHappy:1, e_laugh:1, fr_f1:1, th_clasico:1 },
+      equipped: { emotes:['faceHappy','laugh',null,null], frame:'f1', theme:'clasico' },
       claimed: {}, earned: { date:null, games:0 }, dailyPaid: null, shopSeen: 0,
+      firstSeen: isNew ? Date.now() : 0, welcomeShown: false,
     };
   }
   function loadWallet(){
-    const w = defaultWallet();
-    try{
-      const raw = JSON.parse(localStorage.getItem(WALLET_KEY) || 'null');
-      if(raw && typeof raw==='object'){
-        if(typeof raw.coins==='number' && raw.coins>0) w.coins = Math.floor(raw.coins);
-        if(raw.owned && typeof raw.owned==='object') Object.assign(w.owned, raw.owned);
-        if(raw.equipped){
-          if(Array.isArray(raw.equipped.emotes)) w.equipped.emotes = [0,1,2,3].map(i=> raw.equipped.emotes[i] || null);
-          if(typeof raw.equipped.frame==='string' && FRAME_IDS.indexOf(raw.equipped.frame)!==-1) w.equipped.frame = raw.equipped.frame;
-        }
-        if(raw.claimed && typeof raw.claimed==='object') w.claimed = raw.claimed;
-        if(raw.earned && typeof raw.earned==='object') w.earned = Object.assign(w.earned, raw.earned);
-        w.dailyPaid = raw.dailyPaid || null;
-        w.shopSeen = raw.shopSeen || 0;
+    let raw = walletRead();
+    let seal = checkSeal(raw);
+    const coinsOk = r=> typeof r.coins==='number' && r.coins>=0 && r.coins<=COIN_SANITY_MAX;
+    if(seal==='bad'){
+      walletTamperNotice = true;                       // firma rota: se vuelve al último estado firmado, si hay
+      raw = walletBackupRead(); seal = checkSeal(raw);
+      if(seal!=='ok' || !coinsOk(raw)) raw = null;
+    } else if(seal==='legacy'){
+      if(!(typeof raw.coins==='number' && raw.coins>=0 && raw.coins<=LEGACY_COIN_MAX)){ walletTamperNotice = true; raw = null; }
+    } else if(seal==='ok'){
+      if(!coinsOk(raw)){ walletTamperNotice = true; raw = null; }
+    } else raw = null;
+    const w = defaultWallet(!raw);
+    if(raw){
+      if(typeof raw.coins==='number' && raw.coins>0) w.coins = Math.floor(raw.coins);
+      if(raw.owned && typeof raw.owned==='object') Object.keys(raw.owned).forEach(id=>{ if(raw.owned[id] && itemById(id)) w.owned[id] = 1; });
+      if(raw.equipped){
+        if(Array.isArray(raw.equipped.emotes)) w.equipped.emotes = [0,1,2,3].map(i=> raw.equipped.emotes[i] || null);
+        if(typeof raw.equipped.frame==='string' && FRAME_IDS.indexOf(raw.equipped.frame)!==-1) w.equipped.frame = raw.equipped.frame;
+        if(typeof raw.equipped.theme==='string') w.equipped.theme = raw.equipped.theme;
       }
-    }catch(e){}
-    // solo pueden estar equipados emotes y globos que sean tuyos
+      if(raw.claimed && typeof raw.claimed==='object') w.claimed = raw.claimed;
+      if(raw.earned && typeof raw.earned==='object') w.earned = Object.assign(w.earned, raw.earned);
+      w.dailyPaid = raw.dailyPaid || null;
+      w.shopSeen = raw.shopSeen || 0;
+      w.firstSeen = typeof raw.firstSeen==='number' ? raw.firstSeen : 0;   // billetera vieja: no es primera sesión
+      w.welcomeShown = !!raw.welcomeShown;
+    }
+    // solo pueden estar equipados emotes, globos y tableros que sean tuyos
     w.equipped.emotes = w.equipped.emotes.map(id=> (id && w.owned['e_'+id]) ? id : null);
     if(!w.owned['fr_'+w.equipped.frame]) w.equipped.frame = 'f1';
+    if(!w.owned['th_'+w.equipped.theme]) w.equipped.theme = 'clasico';
     return w;
   }
   let wallet = loadWallet();
-  function saveWallet(){ try{ localStorage.setItem(WALLET_KEY, JSON.stringify(wallet)); }catch(e){} }
+  function saveWallet(){
+    const text = signed(wallet);
+    try{                                               // copia del estado firmado anterior, para recuperar si alguien edita
+      const prev = localStorage.getItem(WALLET_KEY);
+      if(prev && checkSeal(JSON.parse(prev))==='ok') localStorage.setItem(WALLET_BAK_KEY, prev);
+    }catch(e){}
+    try{ localStorage.setItem(WALLET_KEY, text); }catch(e){}
+    try{ if(window.AndroidWallet && typeof window.AndroidWallet.setWallet==='function') window.AndroidWallet.setWallet(text); }catch(e){}
+  }
+
+  // ---------- 138/139 · entitlements: { premium, unlocks:{ clave: expira } } (firmados igual que la billetera) ----------
+  const ENT_KEY = 'quoridor_entitlements';
+  let entTamperNotice = false;
+  function defaultEnt(){ return { v:1, premium:false, premiumVerifiedAt:0, premiumToken:'', unlocks:{}, lastSeen:0 }; }
+  function loadEnt(){
+    const e = defaultEnt();
+    try{
+      const raw = JSON.parse(localStorage.getItem(ENT_KEY) || 'null');
+      if(raw && typeof raw==='object'){
+        if(checkSeal(raw)!=='ok'){ entTamperNotice = true; return e; }
+        e.premium = raw.premium===true;
+        e.premiumVerifiedAt = typeof raw.premiumVerifiedAt==='number' ? raw.premiumVerifiedAt : 0;
+        e.premiumToken = typeof raw.premiumToken==='string' ? raw.premiumToken.slice(0, 4096) : '';
+        e.lastSeen = typeof raw.lastSeen==='number' ? raw.lastSeen : 0;
+        if(raw.unlocks && typeof raw.unlocks==='object') Object.keys(raw.unlocks).forEach(k=>{ if(typeof raw.unlocks[k]==='number') e.unlocks[k] = raw.unlocks[k]; });
+      }
+    }catch(err){}
+    return e;
+  }
+  let entitlements = loadEnt();
+  let premiumSessionOk = false;                    // true sólo si Play confirmó la compra en ESTA sesión
+  function saveEnt(){ try{ localStorage.setItem(ENT_KEY, signed(entitlements)); }catch(e){} }
+  function isGatedFeature(f){
+    if(f.indexOf('mode:')===0) return LOCKED_MODES.indexOf(f.slice(5))!==-1;
+    if(f.indexOf('skin:')===0) return Object.values(CAMPAIGN_SHAPE_UNLOCKS).indexOf(f.slice(5))!==-1;
+    return false;
+  }
+  function pruneEntitlements(){
+    const t = Date.now(), e = entitlements;
+    let dirty = false;
+    if(t < e.lastSeen - CLOCK_BACK_TOL_MS){          // reloj atrasado: los desbloqueos temporales y la gracia offline se anulan
+      if(Object.keys(e.unlocks).length || e.premiumVerifiedAt){ e.unlocks = {}; e.premiumVerifiedAt = 0; dirty = true; }
+    } else if(t > e.lastSeen + 60000){ e.lastSeen = t; dirty = true; }
+    Object.keys(e.unlocks).forEach(k=>{ if(!(e.unlocks[k] > t)){ delete e.unlocks[k]; dirty = true; } });
+    if(dirty) saveEnt();
+  }
+  function premiumActive(){
+    pruneEntitlements();
+    const e = entitlements;
+    if(!e.premium) return false;
+    if(premiumSessionOk) return true;
+    return e.premiumVerifiedAt > 0 && (Date.now() - e.premiumVerifiedAt) < PREMIUM_GRACE_MS;
+  }
+  // isUnlocked('premium') · isUnlocked('mode:party') · isUnlocked('skin:star'). Lo que no está bloqueado siempre da true.
+  function isUnlocked(feature){
+    if(feature==='premium') return premiumActive();
+    if(!isGatedFeature(feature)) return true;
+    if(premiumActive()) return true;
+    pruneEntitlements();
+    return (entitlements.unlocks[feature] || 0) > Date.now();
+  }
+  function grantUnlock(feature, ms){
+    entitlements.unlocks[feature] = Date.now() + (ms || AD_UNLOCK_MS);
+    saveEnt();
+  }
+  function featureLabel(f){
+    if(f.indexOf('mode:')===0) return (RULESETS[f.slice(5)] || {}).label || f;
+    if(f.indexOf('skin:')===0) return 'Forma ' + (SHAPE_LABEL[f.slice(5)] || f.slice(5));
+    return f;
+  }
+
+  // ---------- 138 · anuncio recompensado (puente AndroidAds) ----------
+  // JS -> nativo:  AndroidAds.showRewarded(requestId, placement)
+  // nativo -> JS:  window.onRewardedAdResult(requestId, status)   status: 'rewarded' | 'closed' | 'failed' | 'noFill'
+  // La recompensa se da SÓLO con 'rewarded' y el requestId pendiente; el pedido se consume antes de pagar (un pago por anuncio).
+  let adPending = null;
+  function adsAvailable(){ return !!(window.AndroidAds && typeof window.AndroidAds.showRewarded==='function'); }
+  function requestRewardedAd(placement, onGrant){
+    if(adPending){ showToast('Ya hay un anuncio en curso.'); return false; }
+    if(!adsAvailable()){ showToast('Los anuncios no están disponibles ahora.'); return false; }
+    const id = 'ad' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    adPending = { id, placement, onGrant, timer: setTimeout(()=>{ if(adPending && adPending.id===id) adPending = null; }, AD_TIMEOUT_MS) };
+    try{ window.AndroidAds.showRewarded(id, placement); }
+    catch(e){ clearTimeout(adPending.timer); adPending = null; showToast('No se pudo mostrar el anuncio.'); return false; }
+    return true;
+  }
+  window.onRewardedAdResult = function(id, status){
+    const p = adPending;
+    if(!p || p.id!==String(id)) return;              // respuesta vieja, repetida o inventada
+    clearTimeout(p.timer); adPending = null;
+    if(status==='rewarded') p.onGrant();
+    else if(status==='noFill') showToast('No hay anuncios disponibles. Probá en un rato.');
+    else if(status==='failed') showToast('No se pudo mostrar el anuncio.');
+    else showToast('Cerraste el anuncio antes de tiempo: sin recompensa.');
+  };
+  // Pide el desbloqueo temporal de un modo o una forma: anuncio (30 min) o Premium.
+  function offerUnlock(feature, onUnlocked){
+    const label = featureLabel(feature);
+    if(!adsAvailable()){ showToast('🔒 «' + escapeHtml(label) + '» es Premium. Lo conseguís desde la tienda de la app.'); return; }
+    showConfirm('«' + label + '» está bloqueado. Mirá un anuncio y usalo ' + Math.round(AD_UNLOCK_MS/60000) + ' minutos, o conseguí Premium en la tienda.', ()=>{
+      requestRewardedAd('unlock:' + feature, ()=>{
+        grantUnlock(feature);
+        showToast('🔓 «' + escapeHtml(label) + '» desbloqueado ' + Math.round(AD_UNLOCK_MS/60000) + ' min');
+        if(onUnlocked) onUnlocked();
+      });
+    }, 'Ver anuncio');
+  }
+  // Duplicar las monedas de la victoria: se duplica LO YA PAGADO (después del tope diario) y una sola vez por partida.
+  function doubleWinCoins(){
+    const rw = state && state.lastReward;
+    if(!rw || rw.doubled || !(rw.coins>0)) return;
+    const grant = ()=>{
+      if(rw.doubled) return;
+      rw.doubled = true;
+      const extra = rw.coins;
+      addCoins(extra, { reason:'Monedas duplicadas' });
+      rw.coins = extra * 2;
+      const el = document.getElementById('winCoinCount');
+      if(el) el.textContent = rw.coins;
+      refreshWinDouble();
+    };
+    if(premiumActive()) grant(); else requestRewardedAd('double_win', grant);
+  }
+  function refreshWinDouble(){
+    const rw = state && state.lastReward;
+    const show = !!(rw && state.winner && rw.coins>0 && !rw.doubled && (adsAvailable() || premiumActive()));
+    winDoubleBtn.classList.toggle('hidden', !show);
+    if(show) winDoubleBtn.textContent = 'Duplicar monedas (+' + rw.coins + ')' + (premiumActive() ? '' : ' · ver anuncio');
+  }
+  winDoubleBtn.addEventListener('click', doubleWinCoins);
+
+  // ---------- 139 · Premium: compra única con Play Billing (puente AndroidBilling) ----------
+  // JS -> nativo:  AndroidBilling.purchase(productId) · AndroidBilling.queryPurchases()
+  // nativo -> JS:  window.onBillingResult({ type:'purchase'|'restore'|'cancelled'|'error', complete?:bool,
+  //                  purchases:[{ productId, state:'purchased'|'pending', token, verified:bool }] })
+  // `verified:true` lo pone el lado nativo/servidor DESPUÉS de validar el token con Google Play (y confirmar la compra).
+  // Un indicador local solo nunca alcanza: Premium cuenta sólo si Play lo confirma (o dentro de la gracia del último chequeo).
+  let billingBusy = false;
+  function billingAvailable(){ return !!(window.AndroidBilling && typeof window.AndroidBilling.purchase==='function'); }
+  function setPremium(on, token){
+    entitlements.premium = !!on;
+    entitlements.premiumVerifiedAt = on ? Date.now() : 0;
+    entitlements.premiumToken = on ? String(token || '').slice(0, 4096) : '';
+    premiumSessionOk = !!on;
+    saveEnt();
+    if(typeof shopOverlay!=='undefined' && !shopOverlay.classList.contains('hidden')) renderShop();
+    refreshWinDouble();
+  }
+  function buyPremium(){
+    if(premiumActive()) return;
+    if(!billingAvailable()){ showToast('Premium se compra desde la app de Google Play.'); return; }
+    if(billingBusy) return;
+    billingBusy = true;
+    setTimeout(()=>{ billingBusy = false; }, 60000);
+    try{ window.AndroidBilling.purchase(PREMIUM_PRODUCT_ID); }
+    catch(e){ billingBusy = false; showToast('No se pudo iniciar la compra.'); }
+  }
+  function restorePurchases(){
+    if(!billingAvailable() || typeof window.AndroidBilling.queryPurchases!=='function'){ showToast('Restaurar compras sólo funciona en la app de Google Play.'); return; }
+    try{ window.AndroidBilling.queryPurchases(); showToast('Buscando tus compras…'); }
+    catch(e){ showToast('No se pudo consultar Google Play.'); }
+  }
+  window.onBillingResult = function(res){
+    try{ if(typeof res==='string') res = JSON.parse(res); }catch(e){ return; }
+    if(!res || typeof res!=='object') return;
+    billingBusy = false;
+    if(res.type==='cancelled') return;
+    if(res.type==='error' || res.error){ showToast('No se pudo completar la operación con Google Play.'); return; }
+    const list = Array.isArray(res.purchases) ? res.purchases : [];
+    const mine = list.filter(p=> p && p.productId===PREMIUM_PRODUCT_ID);
+    const ok = mine.find(p=> p.state==='purchased' && p.verified===true && typeof p.token==='string' && p.token);
+    if(ok){
+      const was = premiumActive();
+      setPremium(true, ok.token);
+      if(!was) showToast('⭐ ¡Premium activado!');
+    } else if(mine.some(p=> p.state==='pending')){
+      showToast('Compra pendiente: se activa cuando se confirme el pago.');
+    } else if(res.type==='restore' && res.complete===true && entitlements.premium){
+      setPremium(false);                              // Play ya no la reconoce (reembolso o cuenta distinta)
+      showToast('Premium ya no figura en tu cuenta de Google Play.');
+    } else if(res.type==='restore' && !billingSilentRestore){
+      showToast('No encontramos compras para restaurar.');
+    }
+    if(res.type==='restore') billingSilentRestore = false;
+  };
+  let billingSilentRestore = false;                 // la consulta de arranque no muestra avisos si no hay nada
   function itemById(id){ return SHOP_ITEMS.find(it=> it.id===id) || null; }
   function ownsItem(it){ return !!wallet.owned[it.id]; }
   function isEquipped(it){
     if(it.type==='emote') return wallet.equipped.emotes.indexOf(it.icon)!==-1;
+    if(it.type==='theme') return wallet.equipped.theme===it.theme;
+    if(it.type==='pack') return false;
     return wallet.equipped.frame===it.frame;
   }
   function earnedToday(){ return wallet.earned && wallet.earned.date===todayKey() ? (wallet.earned.games||0) : 0; }
@@ -1866,6 +2448,7 @@
   let toastQueue = [];
   let toastShowing = false;
   function showToast(html){
+    if(HEADLESS) return;
     toastQueue.push(html);
     if(!toastShowing) advanceToastQueue();
   }
@@ -1912,8 +2495,9 @@
   }
   function addCoins(amount, opts){
     opts = opts || {};
-    if(!amount) return;
-    wallet.coins = Math.max(0, wallet.coins + amount);
+    amount = Math.floor(amount);
+    if(!amount || !isFinite(amount)) return;
+    wallet.coins = Math.min(COIN_SANITY_MAX, Math.max(0, wallet.coins + amount));
     saveWallet();
     updateCoinUI(true);
     if(!opts.silent){
@@ -1931,15 +2515,15 @@
   function pendingClaims(){
     return ACHIEVEMENTS.filter(a=> statsData.achievementsUnlocked.indexOf(a.id)!==-1 && !wallet.claimed[a.id]).length;
   }
-  function affordableItems(){ return SHOP_ITEMS.filter(it=> !ownsItem(it) && it.price<=wallet.coins).length; }
+  function affordableItems(){ return SHOP_ITEMS.filter(it=> it.type!=='pack' && shopVisible(it) && !ownsItem(it) && it.price<=wallet.coins).length; }
   function setBadge(el, n){
     el.textContent = n > 9 ? '9+' : String(n);
     el.classList.toggle('hidden', !(n>0));
   }
   function updateBadges(){
     setBadge(trophyBadge, pendingClaims());
-    setBadge(shopBadge, wallet.coins > wallet.shopSeen ? affordableItems() : 0);
-    dailyReadyChip.classList.toggle('hidden', statsData.daily.lastDate === todayKey());
+    setBadge(shopBadge, (wallet.coins > wallet.shopSeen ? affordableItems() : 0) + (welcomeClaimable() ? 1 : 0));
+    dailyReadyChip.classList.toggle('hidden', isDailyDone(statsData.daily, utcDayKey()));
   }
 
   // ---------- emotes: dibujo (globo + ícono componen en runtime: 7 globos × 29 íconos sin repetir archivos) ----------
@@ -2228,11 +2812,23 @@
     const cpuRow = statsData.vsCpu.played>0
       ? `<div class="stats-row"><span>Contra la IA</span><span>${statsData.vsCpu.won} de ${statsData.vsCpu.played}</span></div>`
       : '';
+    // ventaja del primer turno (62): % de victorias de quien abre y de cada asiento
+    let seatHTML = '';
+    Object.keys(statsData.seat||{}).sort().forEach(k=>{
+      const sd = statsData.seat[k]; if(!sd || !sd.games) return;
+      const [rsKey, cnt] = k.split(':'), n = +cnt;
+      const label = (RULESETS[rsKey] ? RULESETS[rsKey].label : rsKey) + ' · ' + n + ' jugadores';
+      const pct = Math.round(100*sd.firstWins/sd.games);
+      const seats = [0,1,2,3].slice(0,n).map(i=> `${i+1}.º asiento ${Math.round(100*(sd.bySeat[i]||0)/sd.games)}%`).join(' · ');
+      seatHTML += `<div class="stats-row seat-row"><span>${escapeHtml(label)}</span><span>Quien abre ganó ${pct}% de ${sd.games}</span></div><p class="field-hint seat-hint">${seats}${sd.games<20 ? ' · pocas partidas todavía' : ''}</p>`;
+    });
+    if(seatHTML) seatHTML = '<h3 class="stats-sub">Ventaja del primer turno</h3>' + seatHTML;
     statsBody.innerHTML = `
       <div class="stats-row"><span>Partidas jugadas</span><span>${statsData.totalGames}</span></div>
       ${rows}
       ${cpuRow}
       <p class="streak-line">${streakText}</p>
+      ${seatHTML}
     `;
   }
   resetStatsBtn.addEventListener('click', ()=>{
@@ -2248,64 +2844,174 @@
   statsLinkBtn.addEventListener('click', ()=>{ renderStatsOverlay(); openOverlay('stats'); });
   closeStatsBtn.addEventListener('click', ()=> closeOverlay('stats'));
 
-  // ---------- tienda: emotes + globos, con vista previa y espacios para equipar ----------
+  // ---------- tienda: emotes + globos + tableros + ofertas, con vista previa y espacios para equipar ----------
   let shopTab = 'common';
   let shopSelected = null;
   let shopSlot = 0;
+  let shopTicker = null;
+  const RARITY_LABEL = { common:'Emote común', rare:'Emote raro', epic:'Emote épico' };
+
+  // 141 · ventana de disponibilidad (sólo limita la compra)
+  function hasWindow(it){ return !!(it.availableFrom || it.availableTo || it.sinceFirstSessionHours); }
+  function offerWindow(it){
+    let from = it.availableFrom ? Date.parse(it.availableFrom) : null;
+    let to = it.availableTo ? Date.parse(it.availableTo) : null;
+    if(it.sinceFirstSessionHours){
+      from = wallet.firstSeen || 0;
+      to = wallet.firstSeen ? wallet.firstSeen + it.sinceFirstSessionHours * 3600000 : 0;   // sin primera sesión registrada: vencida
+    }
+    return { from, to };
+  }
+  function isAvailableNow(it){
+    if(!hasWindow(it)) return true;
+    const w = offerWindow(it), t = Date.now();
+    return (w.from==null || t>=w.from) && (w.to==null || t<w.to);
+  }
+  function shopVisible(it){ return ownsItem(it) || isAvailableNow(it); }   // lo próximo y lo vencido no se muestra
+  function welcomeClaimable(){
+    const it = itemById('pk_bienvenida');
+    return !!it && !ownsItem(it) && isAvailableNow(it);
+  }
+  function fmtRemaining(ms){
+    if(ms<=0) return 'Terminada';
+    const s = Math.floor(ms/1000), d = Math.floor(s/86400), h = Math.floor(s%86400/3600), m = Math.floor(s%3600/60);
+    if(d>0) return d + ' d ' + h + ' h';
+    if(h>0) return h + ' h ' + m + ' min';
+    return m + ' min ' + String(s%60).padStart(2,'0') + ' s';
+  }
+  // 137 · tabla de tiempo hasta cada desbloqueo (con el tope diario DAILY_GAME_COIN_CAP y las victorias por dificultad)
+  function economyTable(){
+    return SHOP_ITEMS.filter(it=> it.price>0).map(it=>({
+      id: it.id, name: it.name, price: it.price,
+      minDays: Math.ceil(it.price / DAILY_GAME_COIN_CAP),
+      winsNormal: Math.ceil(it.price / DIFFICULTY.normal.coins),
+      winsHard: Math.ceil(it.price / DIFFICULTY.hard.coins),
+      winsExpert: Math.ceil(it.price / DIFFICULTY.expert.coins),
+    }));
+  }
+  function themeSwatchHTML(it, w){
+    const c = it.colors || ['#e7ddc9','#ddcfb0'];
+    let r = '';
+    for(let y=0;y<4;y++) for(let x=0;x<4;x++) r += `<rect x="${x}" y="${y}" width="1" height="1" fill="${c[(x+y)%2]}"/>`;
+    return `<svg class="theme-sw" viewBox="0 0 4 4" width="${w}" height="${w}" aria-hidden="true">${r}</svg>`;
+  }
   function shopVisual(it, w){
+    if(it.type==='theme') return themeSwatchHTML(it, w);
+    if(it.type==='pack') return `<span class="pack-ico" style="font-size:${Math.round(w*0.85)}px">🎁</span>`;
     return it.type==='emote' ? emoteHTML(it.icon, currentFrame(), w) : emoteHTML('faceHappy', it.frame, w);
+  }
+  function shopItemsFor(tab){
+    return SHOP_ITEMS.filter(it=>{
+      if(!shopVisible(it)) return false;
+      if(tab==='frames') return it.type==='frame';
+      if(tab==='themes') return it.type==='theme';
+      if(tab==='offers') return hasWindow(it) && !ownsItem(it);
+      return it.type==='emote' && it.rarity===tab;
+    });
+  }
+  function featureMinutesLeft(ms){ return Math.max(1, Math.ceil((ms - Date.now()) / 60000)); }
+  function renderShopExtras(){
+    let h = '';
+    if(premiumActive()){
+      h += '<div class="premium-row on"><span>⭐ Premium activo · todo desbloqueado</span></div>';
+    } else {
+      const can = billingAvailable();
+      h += `<div class="premium-row"><span>⭐ <b>Premium</b> · compra única: todos los modos y formas, y monedas dobles sin anuncios</span>`
+        + `<span class="pr-actions"><button type="button" class="kbtn yellow small" data-pact="premium" ${can?'':'disabled'}>Obtener</button>`
+        + `<button type="button" class="kbtn grey small" data-pact="restore" ${can?'':'disabled'}>Restaurar</button></span></div>`;
+      if(!can) h += '<p class="field-hint" style="margin:0; text-align:left;">Premium está disponible en la app de Google Play.</p>';
+      const act = Object.keys(entitlements.unlocks).filter(k=> entitlements.unlocks[k] > Date.now());
+      if(act.length) h += '<p class="field-hint" style="margin:0; text-align:left;">Desbloqueado por anuncio: '
+        + act.map(k=> escapeHtml(featureLabel(k)) + ' (' + featureMinutesLeft(entitlements.unlocks[k]) + ' min)').join(' · ') + '</p>';
+    }
+    shopExtrasEl.innerHTML = h;
   }
   function renderShop(){
     shopCoinsEl.textContent = wallet.coins;
+    renderShopExtras();
     shopSlotsEl.innerHTML = wallet.equipped.emotes.map((id,i)=>
       `<button type="button" class="shop-slot ${i===shopSlot?'active':''}" data-slot="${i}" aria-label="Espacio ${i+1}">${id ? emoteHTML(id, currentFrame(), 43) : '+'}</button>`).join('');
     shopTabsEl.innerHTML = SHOP_TABS.map(t=> `<button type="button" class="shop-tab ${t.id===shopTab?'active':''}" data-tab="${t.id}">${t.label}</button>`).join('');
-    const items = SHOP_ITEMS.filter(it=> shopTab==='frames' ? it.type==='frame' : (it.type==='emote' && it.rarity===shopTab));
-    shopGridEl.innerHTML = items.map(it=>{
+    const items = shopItemsFor(shopTab);
+    shopGridEl.innerHTML = items.length ? items.map(it=>{
       const owned = ownsItem(it);
-      const tag = isEquipped(it) ? '<span class="tag">En uso</span>' : (owned ? '<span class="tag" style="background:#3a6ea5">Tuyo</span>' : '');
-      const price = owned ? '' : `<span class="pr"><img src="${emoteIconSrc('cash')}" alt="">${it.price}</span>`;
-      return `<button type="button" class="shop-item ${it.id===shopSelected?'selected':''}" data-id="${it.id}">${tag}${shopVisual(it,38)}<span class="nm">${escapeHtml(it.name)}</span>${price}</button>`;
-    }).join('');
+      const tag = isEquipped(it) ? '<span class="tag">En uso</span>' : (owned ? '<span class="tag" style="background:#3a6ea5">Tuyo</span>' : (hasWindow(it) ? '<span class="tag offer">Oferta</span>' : ''));
+      const price = owned ? '' : (it.price>0 ? `<span class="pr"><img src="${emoteIconSrc('cash')}" alt="">${it.price}</span>` : '<span class="pr">Gratis</span>');
+      const w = offerWindow(it);
+      const cd = (!owned && w.to!=null) ? `<span class="cd" data-to="${w.to}">${fmtRemaining(w.to - Date.now())}</span>` : '';
+      return `<button type="button" class="shop-item ${it.id===shopSelected?'selected':''}" data-id="${it.id}">${tag}${shopVisual(it,38)}<span class="nm">${escapeHtml(it.name)}</span>${price}${cd}</button>`;
+    }).join('') : '<p class="field-hint" style="grid-column:1/-1; text-align:center; margin:10px 0;">No hay ofertas por ahora. ¡Volvé pronto!</p>';
     renderShopDetail();
   }
   function shopPreviewSvg(it){
     const skin = pieceSkins[0];
+    if(it.type==='pack') return '<svg viewBox="0 0 200 130" aria-hidden="true"><text x="100" y="80" font-size="64" text-anchor="middle">🎁</text></svg>';
+    if(it.type==='theme'){
+      const c = it.colors || ['#e7ddc9','#ddcfb0'];
+      let g = `<rect width="200" height="130" fill="${c[0]}"/>`;
+      for(let y=0;y<3;y++) for(let x=0;x<5;x++) if((x+y)%2===1) g += `<rect x="${x*40}" y="${y*43.3}" width="40" height="43.4" fill="${c[1]}"/>`;
+      const pawnT = pieceMarkup(skin.shape, 100, 82, 40, skin.color, '').replace(' filter="url(#pieceShadow)"', '');
+      return `<svg viewBox="0 0 200 130" aria-hidden="true">${g}${pawnT}</svg>`;
+    }
     const frame = it.type==='frame' ? it.frame : currentFrame();
     const icon = it.type==='emote' ? it.icon : 'faceHappy';
     const pawn = pieceMarkup(skin.shape, 100, 106, 40, skin.color, '').replace(' filter="url(#pieceShadow)"', '');
     const k = 1.4;
     return `<svg viewBox="0 0 200 130" aria-hidden="true">${pawn}<g transform="translate(${100-20*k} ${82-42*k}) scale(${k})"><g class="emo-pop loop" style="--dir:1">${emoteSvgInner(icon, frame, false)}</g></g></svg>`;
   }
+  function itemKindLabel(it){
+    if(it.type==='emote') return RARITY_LABEL[it.rarity];
+    if(it.type==='frame') return 'Globo de emotes';
+    if(it.type==='theme') return it.season ? 'Tema de tablero de temporada' : 'Tema de tablero';
+    if(it.type==='pack'){
+      const names = (it.grants.items||[]).map(id=> (itemById(id)||{}).name).filter(Boolean);
+      return it.grants.coins + ' monedas' + (names.length ? ' + ' + names.join(' + ') : '');
+    }
+    return '';
+  }
   function renderShopDetail(){
     const it = shopSelected ? itemById(shopSelected) : null;
-    if(!it){
+    if(!it || !shopVisible(it)){
       shopDetailEl.innerHTML = '<p class="field-hint" style="margin:0; width:100%; text-align:center;">Tocá un ítem para verlo en acción antes de comprarlo.</p>';
       return;
     }
     const owned = ownsItem(it);
-    let sub, btn;
+    const w = offerWindow(it);
+    const cd = (!owned && w.to!=null) ? ` · Vence en <span class="cd" data-to="${w.to}">${fmtRemaining(w.to - Date.now())}</span>` : '';
+    let sub, btn, eco = '';
     if(!owned){
-      const missing = it.price - wallet.coins;
-      sub = it.type==='emote' ? RARITY_LABEL[it.rarity] : 'Globo de emotes';
-      btn = missing>0
-        ? `<button type="button" class="kbtn grey small" data-act="buy" disabled>Te faltan ${missing}</button>`
-        : `<button type="button" class="kbtn green small" data-act="buy">Comprar · ${it.price}</button>`;
+      sub = escapeHtml(itemKindLabel(it)) + cd;
+      const why = canBuy(it);
+      if(it.price>0){
+        const days = Math.max(1, Math.ceil(it.price / DAILY_GAME_COIN_CAP));
+        eco = `<div class="det-eco">≈ ${Math.ceil(it.price / DIFFICULTY.hard.coins)} victorias en Difícil · mínimo ${days} día${days===1?'':'s'} por el tope diario</div>`;
+      }
+      btn = why
+        ? `<button type="button" class="kbtn grey small" data-act="buy" disabled>${escapeHtml(why.replace(/\.$/, ''))}</button>`
+        : `<button type="button" class="kbtn green small" data-act="buy">${it.price>0 ? 'Comprar · ' + it.price : 'Reclamar gratis'}</button>`;
     } else if(isEquipped(it)){
-      sub = it.type==='emote' ? 'Ya está en tus espacios' : 'Es el globo que estás usando';
+      sub = it.type==='emote' ? 'Ya está en tus espacios' : (it.type==='theme' ? 'Es el tablero que estás usando' : 'Es el globo que estás usando');
       btn = `<button type="button" class="kbtn grey small" disabled>En uso</button>`;
     } else {
       sub = 'Tuyo';
       btn = it.type==='emote'
         ? `<button type="button" class="kbtn yellow small" data-act="equip">Poner en espacio ${shopSlot+1}</button>`
-        : `<button type="button" class="kbtn yellow small" data-act="equip">Usar este globo</button>`;
+        : (it.type==='theme'
+          ? `<button type="button" class="kbtn yellow small" data-act="equip">Usar este tablero</button>`
+          : `<button type="button" class="kbtn yellow small" data-act="equip">Usar este globo</button>`);
     }
-    shopDetailEl.innerHTML = `${shopPreviewSvg(it)}<div class="det-info"><div class="det-name">${escapeHtml(it.name)}</div><div class="det-sub">${sub}</div>${btn}</div>`;
+    shopDetailEl.innerHTML = `${shopPreviewSvg(it)}<div class="det-info"><div class="det-name">${escapeHtml(it.name)}</div><div class="det-sub">${sub}</div>${eco}${btn}</div>`;
   }
-  const RARITY_LABEL = { common:'Emote común', rare:'Emote raro', epic:'Emote épico' };
+  function applyBoardTheme(){
+    const t = wallet.equipped.theme;
+    if(t && t!=='clasico') document.documentElement.setAttribute('data-board', t);
+    else document.documentElement.removeAttribute('data-board');
+  }
   function equipItem(it){
+    if(!ownsItem(it)) return;
     if(it.type==='frame'){ wallet.equipped.frame = it.frame; }
-    else {
+    else if(it.type==='theme'){ wallet.equipped.theme = it.theme; applyBoardTheme(); }
+    else if(it.type==='emote'){
       const arr = wallet.equipped.emotes;
       const idx = arr.indexOf(it.icon);
       const prev = arr[shopSlot];
@@ -2314,13 +3020,29 @@
     }
     saveWallet();
   }
+  // Devuelve '' si se puede comprar, o el motivo en castellano.
+  function canBuy(it){
+    if(!it || !itemById(it.id)) return 'Ese objeto ya no está en la tienda.';
+    if(ownsItem(it)) return 'Ya lo tenés.';
+    if(!Number.isInteger(it.price) || it.price<0) return 'Precio inválido.';
+    if(!isAvailableNow(it)) return 'Esta oferta ya terminó.';
+    if(wallet.coins < it.price) return 'Te faltan ' + (it.price - wallet.coins) + ' monedas.';
+    return '';
+  }
+  function autoEquipEmote(it){
+    if(it.type!=='emote') return;
+    const empty = wallet.equipped.emotes.indexOf(null);
+    if(empty!==-1) wallet.equipped.emotes[empty] = it.icon;     // si hay un espacio libre, queda puesto
+  }
   function buyItem(it){
-    if(ownsItem(it) || wallet.coins < it.price) return;
+    const why = canBuy(it);                       // se revalida SIEMPRE: precio, saldo, si ya es tuyo y si la oferta sigue vigente
+    if(why){ showToast(escapeHtml(why)); return false; }
     wallet.coins -= it.price;
     wallet.owned[it.id] = 1;
-    if(it.type==='emote'){
-      const empty = wallet.equipped.emotes.indexOf(null);
-      if(empty!==-1) wallet.equipped.emotes[empty] = it.icon;     // si hay un espacio libre, queda puesto
+    autoEquipEmote(it);
+    if(it.type==='pack' && it.grants){
+      if(it.grants.coins) wallet.coins = Math.min(COIN_SANITY_MAX, wallet.coins + it.grants.coins);
+      (it.grants.items||[]).forEach(id=>{ const g = itemById(id); if(g){ wallet.owned[g.id] = 1; autoEquipEmote(g); } });
     }
     wallet.shopSeen = wallet.coins;
     saveWallet();
@@ -2328,6 +3050,17 @@
     vibrate(20);
     updateCoinUI(true);
     updateBadges();
+    return true;
+  }
+  function tickShop(){
+    if(shopOverlay.classList.contains('hidden')){ clearInterval(shopTicker); shopTicker = null; return; }
+    let expired = false;
+    shopOverlay.querySelectorAll('.cd[data-to]').forEach(el=>{
+      const left = +el.dataset.to - Date.now();
+      el.textContent = fmtRemaining(left);
+      if(left<=0) expired = true;
+    });
+    if(expired) renderShop();                     // la oferta vencida desaparece sola
   }
   function openShop(){
     wallet.shopSeen = wallet.coins;
@@ -2335,8 +3068,12 @@
     renderShop();
     openOverlay('shop');
     updateBadges();
+    if(shopTicker) clearInterval(shopTicker);
+    shopTicker = setInterval(tickShop, 1000);
   }
   shopOverlay.addEventListener('click', e=>{
+    const pa = e.target.closest('button[data-pact]');
+    if(pa){ if(pa.dataset.pact==='premium') buyPremium(); else if(pa.dataset.pact==='restore') restorePurchases(); return; }
     const slot = e.target.closest('.shop-slot');
     if(slot){ shopSlot = +slot.dataset.slot; renderShop(); return; }
     const tab = e.target.closest('.shop-tab');
@@ -2347,9 +3084,10 @@
     if(act && shopSelected){
       const it = itemById(shopSelected);
       if(!it) return;
-      if(act.dataset.act==='buy') buyItem(it);
-      else if(act.dataset.act==='equip') equipItem(it);
-      renderShop();
+      if(act.dataset.act==='buy'){
+        if(it.price>0) showConfirm('¿Comprar «' + it.name + '» por ' + it.price + ' monedas?', ()=>{ buyItem(it); renderShop(); }, 'Sí, comprar');
+        else { buyItem(it); renderShop(); }
+      } else if(act.dataset.act==='equip'){ equipItem(it); renderShop(); }
     }
   });
   shopLinkBtn.addEventListener('click', openShop);
@@ -2357,7 +3095,13 @@
   closeShopBtn.addEventListener('click', ()=>{ closeOverlay('shop'); updateBadges(); });
 
   // ---------- recompensas de partida / desafío diario ----------
-  function dailyStars(moves, par){ return moves<=par ? 3 : (moves<=par+3 ? 2 : 1); }
+  function dailyStars(moves, par, slack){ const k = (slack==null ? 3 : slack); return moves<=par ? 3 : (moves<=par+k ? 2 : 1); }
+  // Datos del desafío en juego (si la partida se armó sin ellos, p. ej. en pruebas, se completan con los de hoy).
+  function dailyInfoOf(st){
+    if(st && st.dailyInfo) return st.dailyInfo;
+    const cfg = dailyModeFor(utcDayKey());
+    return { dateKey:utcDayKey(), number:dailyNumberOf(utcDayKey()), id:cfg.id, label:cfg.label, emoji:cfg.emoji, hint:cfg.hint, slack:cfg.slack, turnSeconds:0 };
+  }
   function dailyBaseCoins(streak){ return 20 + 5*(Math.min(Math.max(streak,1),7)-1); }
   function starsHTML(n, total, px){
     let h = '';
@@ -2379,10 +3123,10 @@
     addCoins(pay, { silent:true });
     return r;
   }
-  function dailyReward(res, moves, par){
-    const stars = dailyStars(moves, par);
+  function dailyReward(res, moves, par, dateKey, slack){
+    const stars = dailyStars(moves, par, slack);
     const r = { coins:0, note:'', stars, chest:null };
-    const today = todayKey();
+    const today = dateKey || utcDayKey();
     if(wallet.dailyPaid===today){ r.note = 'Ya cobraste la recompensa de hoy.'; return r; }
     wallet.dailyPaid = today;
     let coins = dailyBaseCoins(res.streak) + (stars-1)*10;
@@ -2402,7 +3146,7 @@
     return r;
   }
   function nextGoal(){
-    const unowned = SHOP_ITEMS.filter(it=> !ownsItem(it)).sort((a,b)=> a.price-b.price);
+    const unowned = SHOP_ITEMS.filter(it=> (it.type==='emote' || it.type==='frame') && !ownsItem(it)).sort((a,b)=> a.price-b.price);
     if(!unowned.length) return null;
     const above = unowned.find(it=> it.price > wallet.coins);
     return { item: above || unowned[0], canBuy: !above };
@@ -2456,6 +3200,17 @@
   function saveSkins(){ try{ localStorage.setItem('quoridor_pieceSkins', JSON.stringify(pieceSkins)); }catch(e){} }
   let pieceSkins = loadSkins();
 
+  function shapeAdGated(sh){ return Object.values(CAMPAIGN_SHAPE_UNLOCKS).indexOf(sh)!==-1; }
+  function shapeUsable(sh){ return campaignShapeUnlocked(sh) || (shapeAdGated(sh) && isUnlocked('skin:' + sh)); }
+  function requestShapeUnlock(sh){
+    if(!shapeAdGated(sh)){ showToast('🔒 Forma bloqueada: avanzá en la campaña para desbloquearla.'); return; }
+    offerUnlock('skin:' + sh, ()=>{ pieceSkins[activeSkinSlot].shape = sh; saveSkins(); recordSkinCustomized(); renderSkinsOverlay(); });
+  }
+  function sanitizeSkinsForLocks(){               // si venció un desbloqueo temporal, la ficha vuelve a su forma de fábrica
+    let changed = false;
+    pieceSkins.forEach((sk,i)=>{ if(!shapeUsable(sk.shape)){ sk.shape = PALETTE[i].shape; changed = true; } });
+    if(changed) saveSkins();
+  }
   function renderSkinsOverlay(){
     const tabsHtml = pieceSkins.map((s,i)=>
       `<button type="button" class="slot-tab ${i===activeSkinSlot?'active':''}" data-slot="${i}" style="background:${s.color}" aria-label="Editar ficha ${i+1}"></button>`
@@ -2467,7 +3222,7 @@
       return `<button type="button" class="color-swatch ${sel} ${locked?'locked-swatch':''}" data-color="${c}" style="background:${c}" aria-label="${locked?'Bloqueado':'Color '+c}">${locked?'🔒':''}</button>`;
     }).join('');
     const shapesHtml = SKIN_SHAPES.map(sh=>{
-      const sel = sh===current.shape ? 'selected' : ''; const locked=!campaignShapeUnlocked(sh);
+      const sel = sh===current.shape ? 'selected' : ''; const locked=!shapeUsable(sh);
       return `<button type="button" class="shape-swatch ${sel} ${locked?'locked-swatch':''}" data-shape="${sh}" aria-label="${locked?'Bloqueado':SHAPE_LABEL[sh]}">${locked?'🔒':smallShapeSVG(sh,'var(--ink)',22)}</button>`;
     }).join('');
     skinsBody.innerHTML = `
@@ -2497,7 +3252,7 @@
     const colorBtn = e.target.closest('.color-swatch');
     if(colorBtn){ setSkinColor(activeSkinSlot, colorBtn.dataset.color); return; }
     const shapeBtn = e.target.closest('.shape-swatch');
-    if(shapeBtn){ if(!campaignShapeUnlocked(shapeBtn.dataset.shape)){ showToast('🔒 Forma bloqueada: avanzá en la campaña para desbloquearla.'); return; } pieceSkins[activeSkinSlot].shape = shapeBtn.dataset.shape; saveSkins(); recordSkinCustomized(); renderSkinsOverlay(); return; }
+    if(shapeBtn){ if(!shapeUsable(shapeBtn.dataset.shape)){ requestShapeUnlock(shapeBtn.dataset.shape); return; } pieceSkins[activeSkinSlot].shape = shapeBtn.dataset.shape; saveSkins(); recordSkinCustomized(); renderSkinsOverlay(); return; }
   });
   resetSkinsBtn.addEventListener('click', ()=>{
     pieceSkins = defaultSkins();
@@ -2526,7 +3281,7 @@
     if(cpNow && cpNow.isCPU) return;
     if(m==='wall'){
       const cp = state.players[state.currentPlayerIndex];
-      if(!cp || cp.wallsLeft<mirrorWallCost()) return;
+      if(!cp || cp.wallsLeft<=0) return;
     }
     mode = m;
     hideWallPreview();
@@ -2536,17 +3291,18 @@
   }
   function updateModeUI(){
     const cp = state && state.players[state.currentPlayerIndex];
-    const canWall = !!cp && cp.wallsLeft>=mirrorWallCost() && !(state && state.winner);
+    const canWall = !!cp && cp.wallsLeft>0 && !(state && state.winner);
     const isHumanTurn = !cp || !cp.isCPU;
     moveModeBtn.classList.toggle('active', mode==='move');
     wallModeBtn.classList.toggle('active', mode==='wall');
     moveModeBtn.disabled = !isHumanTurn;
     wallModeBtn.disabled = !canWall || !isHumanTurn;
     hintLine.classList.remove('thinking');
-    if(state && state.winner){ hintLine.textContent=''; updateSprintBtn(); return; }
+    if(state && state.winner){ hintLine.textContent=''; updateSprintBtn(); updateUndoBtn(); updateAuxButtons(); return; }
     const canPush = !!state && state.ruleset==='hill' && state.validMoves.some(m=> m.push);
     const mapTag = (state && state.mazeInfo && (state.moveCount||0) < state.players.length*2) ? 'Mapa: '+state.mazeInfo.name+'. ' : '';
-    hintLine.textContent = mapTag + (mode==='wall'
+    const dailyTag = (state && state.isDaily && (state.moveCount||0) < 2 && dailyInfoOf(state).hint) ? dailyInfoOf(state).hint+' ' : '';
+    hintLine.textContent = mapTag + dailyTag + (mode==='wall'
       ? 'Arrastrá sobre el tablero para ubicar la pared y soltá para confirmarla.'
       : (state && state.sprintArmed
         ? (state.ruleset==='party' ? 'Paso doble: tocá una casilla a dos pasos en línea recta (no vale para el centro).' : 'Sprint: tocá una casilla a dos pasos en línea recta.')
@@ -2555,8 +3311,12 @@
       const me = state.players[state.currentPlayerIndex];
       if(me && me.fx && me.fx.extra>0) hintLine.textContent = (me.fx.extra===1 ? 'Turno extra activo: después de esta acción jugás otra. ' : 'Acción extra: es la última de este turno. ') + hintLine.textContent;
     }
+    if(state && state.pie && state.pie.open && !(cp && cp.isCPU) && mode!=='wall') hintLine.textContent = '🥧 Regla del pastel: podés cambiar de lado (tomar la posición de tu rival) o jugar normal. ' + hintLine.textContent;
     updateSprintBtn();
+    updateUndoBtn();
     updatePowerBar();
+    updateAuxButtons();
+    updateAssistBtns();
   }
   // Botón de sprint del HUD (sólo existe en Cazador y fugitivo; sólo lo usa el fugitivo humano en su turno)
   function updateSprintBtn(){
@@ -2627,36 +3387,90 @@
     let best=null, bestDist=Infinity;
     state.players.forEach((p,i)=>{
       if(i===excludeIdx) return;
-      const d = distanceToCenter(p.r,p.c,edges);
+      const d = distanceToCenter(p.r,p.c,edges,i);
       if(d<bestDist){ bestDist=d; best=i; }
     });
     return best;
   }
+  // Caminos mínimos del rival: todas las aristas que pertenecen a algún camino más corto desde `start` hasta la meta.
+  // Una pared que no toca ninguna de ellas no puede alargarle el camino, así que ni se prueba (83).
+  function shortestPathDag(mask,size,dm,start){
+    const n=size*size, dag=new Set(), seen=new Uint8Array(n), stack=[start];
+    seen[start]=1;
+    while(stack.length){
+      const cur=stack.pop(), dcur=dm[cur];
+      if(dcur<=0) continue;
+      const r=(cur/size)|0, c=cur-r*size, m=mask[cur];
+      for(let k=0;k<4;k++){
+        if(m&(1<<k)) continue;
+        const nr=r+DIRS4[k][0], nc=c+DIRS4[k][1];
+        if(nr<0||nc<0||nr>=size||nc>=size) continue;
+        const nx=nr*size+nc;
+        if(dm[nx]!==dcur-1) continue;
+        dag.add(cur<nx ? cur*n+nx : nx*n+cur);
+        if(!seen[nx]){ seen[nx]=1; stack.push(nx); }
+      }
+    }
+    return dag;
+  }
+  function wallHitsDag(we,size,dag){
+    const n=size*size;
+    for(const e of we){
+      const a=e[0]*size+e[1], b=e[2]*size+e[3];
+      if(dag.has(a<b ? a*n+b : b*n+a)) return true;
+    }
+    return false;
+  }
   // edgesOverride: base de paredes conocidas para ESTIMAR la ganancia de una pared (niebla de guerra: el
   // conocimiento propio de la IA). La legalidad real de colocarla siempre se valida con el estado real.
-  function findBestBlockingWall(opponentIdx,currentOppDist,distFn,edgesOverride,botIdx){
-    const distOf = distFn || distanceToCenter;
-    const baseEdges = edgesOverride || state.blockedEdges;
+  // Devuelve TODAS las paredes que le alargan el camino al rival, de mayor a menor ganancia. Cada prueba pone las
+  // aristas en una máscara local y las saca en un finally (82): no se copia ningún Set por candidato.
+  function collectWallCandidates(opponentIdx,currentOppDist,distFn,edgesOverride,botIdx){
+    const size=state.size, n=size*size, baseEdges = edgesOverride || state.blockedEdges;
+    const rowsGoal = state.goalMode==='rows';
+    const useHill = distFn===distanceToHill || rowsGoal;
+    const goals = rowsGoal ? hillGoalIdx(goalCells(opponentIdx)) : (useHill ? hillGoalIdx() : [centerGoal()]);
+    let flags = null;
+    if(useHill){ flags = new Uint8Array(n); goals.forEach(g=>{ flags[g]=1; }); }
+    const mask = edgeMaskFor(baseEdges,size).slice();
     // IA aliada (53): Δally = cuánto le alarga la pared el camino a su compañero. Se descuenta doble de la ganancia
     // contra el rival, y la pared que no sale a cuenta se descarta.
     const me = botIdx!=null ? botIdx : state.currentPlayerIndex;
     const ally = (state.teams && state.players[allyIdxOf(me)] && !state.players[allyIdxOf(me)].arrived) ? state.players[allyIdxOf(me)] : null;
-    const allyBase = ally ? distanceToCenter(ally.r,ally.c,baseEdges) : 0;
-    const opp=state.players[opponentIdx], radius=3, maxSlot=state.size-2, candidates=[];
+    const cen = centerGoal();
+    const allyStart = ally ? ally.r*size+ally.c : -1;
+    const allyBase = ally ? bfsToGoal(mask,size,allyStart,cen,null) : 0;
+    const opp=state.players[opponentIdx], start=opp.r*size+opp.c;
+    const dm = buildDistMap(mask,size,goals);
+    // en Espejo la pared lleva su reflejo (también podría tocar el camino), así que ahí no se filtra
+    const dag = (state.ruleset!=='mirror' && dm[start]>0) ? shortestPathDag(mask,size,dm,start) : null;
+    const radius=3, maxSlot=size-2, out=[];
     for(let r=Math.max(0,opp.r-radius);r<=Math.min(maxSlot,opp.r+radius);r++) for(let c=Math.max(0,opp.c-radius);c<=Math.min(maxSlot,opp.c+radius);c++) for(const orientation of ['h','v']){
+      if(dag && !wallHitsDag(wallEdges(r,c,orientation),size,dag)) continue;
       const ev=evaluateWallForMode(r,c,orientation); if(!ev.valid) continue;
-      const test=new Set(baseEdges); ev.edges.forEach(e=>test.add(edgeKey(e[0],e[1],e[2],e[3])));
-      if(ev.mirrorEdges) ev.mirrorEdges.forEach(e=>test.add(edgeKey(e[0],e[1],e[2],e[3])));
-      const d=distOf(opp.r,opp.c,test); if(d<=currentOppDist) continue;
-      const deltaAlly = ally ? Math.max(0, distanceToCenter(ally.r,ally.c,test) - allyBase) : 0;
+      const undo = applyEdgesToMask(mask,size,ev.edges);
+      const undo2 = ev.mirrorEdges ? applyEdgesToMask(mask,size,ev.mirrorEdges) : null;
+      let d, deltaAlly=0;
+      try{
+        d = useHill ? bfsToGoal(mask,size,start,-1,flags) : bfsToGoal(mask,size,start,cen,null);
+        if(ally) deltaAlly = Math.max(0, bfsToGoal(mask,size,allyStart,cen,null) - allyBase);
+      } finally {
+        if(undo2) undoMask(mask,undo2);
+        undoMask(mask,undo);
+      }
+      if(d<=currentOppDist) continue;
       const net = (d-currentOppDist) - deltaAlly*2;
       if(net<=0) continue;
-      candidates.push({r,c,orientation,gain:net,newOppDist:d,deltaAlly});
+      out.push({r,c,orientation,gain:net,newOppDist:d,deltaAlly});
     }
-    if(!candidates.length)return null;
-    candidates.sort((a,b)=>b.gain-a.gain||a.newOppDist-b.newOppDist);
-    const gain=candidates[0].gain, top=candidates.filter(x=>x.gain===gain);
-    return top[Math.floor(Math.random()*top.length)];
+    out.sort((a,b)=>b.gain-a.gain||a.newOppDist-b.newOppDist);
+    return out;
+  }
+  function findBestBlockingWall(opponentIdx,currentOppDist,distFn,edgesOverride,botIdx){
+    const cands = collectWallCandidates(opponentIdx,currentOppDist,distFn,edgesOverride,botIdx);
+    if(!cands.length) return null;
+    const gain=cands[0].gain, top=cands.filter(x=>x.gain===gain);
+    return top[Math.floor(botRand()*top.length)];
   }
   // Pared que más alarga el camino a la zona del rival más cercano (los que ya están dentro no se pueden frenar).
   function findHillBlockingWall(botIdx){
@@ -2695,7 +3509,7 @@
       }
       const hold = moves.filter(m=> !m.push && isHillCell(m.r,m.c));
       // 2) si no, una pared que alargue el camino del rival más cercano (las IA más fuertes la usan más seguido)
-      if(bot.wallsLeft>0 && (hold.length===0 || Math.random() < Math.min(1, (profile.wallChance||0)+0.4))){
+      if(bot.wallsLeft>0 && (hold.length===0 || botRand() < Math.min(1, (profile.wallChance||0)+0.4))){
         const w = findHillBlockingWall(idx) || (hold.length===0 ? findAnyLegalWall() : null);
         if(w) return w;
       }
@@ -2705,7 +3519,7 @@
     if(!moves.length) return { type:'move', r:bot.r, c:bot.c };
     // fuera de la zona (o sin forma de quedarse): el movimiento que mejor puntúa, con el ruido propio de cada dificultad
     const scored = rank(moves);
-    const choice = Math.random()<profile.randomness ? scored[Math.floor(Math.random()*Math.min(3,scored.length))] : scored[0];
+    const choice = botRand()<profile.randomness ? scored[Math.floor(botRand()*Math.min(3,scored.length))] : scored[0];
     return { type:'move', r:choice.m.r, c:choice.m.c };
   }
   // IA cazadora: 1) atrapar si puede quedar pegada al fugitivo, 2) frenarlo con paredes (casi siempre si está cerca del centro),
@@ -2713,20 +3527,20 @@
   function botPlanHunter(idx, profile){
     const bot=state.players[idx], fIdx=state.fugitiveIdx, f=state.players[fIdx], moves=state.validMoves;
     const catches = moves.filter(m=> isCaptureAdjacent(m.r,m.c));
-    if(catches.length && Math.random() >= profile.randomness*0.25){
-      const c = catches[Math.floor(Math.random()*catches.length)];
+    if(catches.length && botRand() >= profile.randomness*0.25){
+      const c = catches[Math.floor(botRand()*catches.length)];
       return { type:'move', r:c.r, c:c.c };
     }
     const fDist = distanceToCenter(f.r,f.c,state.blockedEdges);
     if(bot.wallsLeft>0){
       const chance = fDist<=2 ? Math.min(.95, profile.wallChance+.35) : profile.wallChance;   // más pared cuando el fugitivo está por ganar; escala con la dificultad
-      if(Math.random()<chance){ const w=findBestBlockingWall(fIdx,fDist); if(w) return {type:'wall',r:w.r,c:w.c,orientation:w.orientation}; }
+      if(botRand()<chance){ const w=findBestBlockingWall(fIdx,fDist); if(w) return {type:'wall',r:w.r,c:w.c,orientation:w.orientation}; }
     }
     if(!moves.length) return { type:'move', r:bot.r, c:bot.c };
     const big = v=> isFinite(v) ? v : 99;
     const scored = moves.map(m=> ({ m, score: -big(bfsShortestPath(m.r,m.c,f.r,f.c,state.blockedEdges,state.size))*10 - big(distanceToCenter(m.r,m.c,state.blockedEdges)) }))
       .sort((a,b)=> b.score-a.score);
-    const choice = Math.random()<profile.randomness ? scored[Math.floor(Math.random()*Math.min(3,scored.length))] : scored[0];
+    const choice = botRand()<profile.randomness ? scored[Math.floor(botRand()*Math.min(3,scored.length))] : scored[0];
     return { type:'move', r:choice.m.r, c:choice.m.c };
   }
   // IA fugitiva: llegar al centro gana; si no, maximiza la distancia al cazador más cercano y desempata por distanceToCenter.
@@ -2749,43 +3563,237 @@
     const plain = evaluated.filter(e=> !e.m.sprint).sort(cmp);
     let list = plain;
     if(!plain.length || plain[0].nearest < HUNTER_SAFE_DIST) list = evaluated.slice().sort(cmp);
-    const choice = Math.random() < profile.randomness*0.5 ? list[Math.floor(Math.random()*Math.min(3,list.length))] : list[0];
+    const choice = botRand() < profile.randomness*0.5 ? list[Math.floor(botRand()*Math.min(3,list.length))] : list[0];
     return { type:'move', r:choice.m.r, c:choice.m.c };
   }
-  function botPlanMove(idx){
+  // ---------- Perfiles, voz y explicaciones de la IA (77, 78, 79, 80, 92) ----------
+  const BOT_PROFILES = {
+    easy:{wallChance:.12,randomness:.55,personality:'speed'},
+    normal:{wallChance:.32,randomness:.28,personality:'speed'},
+    hard:{wallChance:.58,randomness:.12,personality:'aggressive'},
+    expert:{wallChance:.82,randomness:.04,personality:'strategist'},
+  };
+  // tiempos de "pensar" por personalidad (la velocidad normal sigue en BOT_THINK_MS); el defensivo no pasa de 1,2 s
+  const BOT_THINK_BY_PERSONALITY = { aggressive:[400,800], defensive:[900,1200], strategist:[700,1100] };
+  // emotes de la IA por personalidad: pared grande, a un paso del centro, o pared del rival que la frena
+  const BOT_EMOTES = {
+    speed:      { wallBig:'idea',  close:'star',        blocked:'faceSad' },
+    aggressive: { wallBig:'laugh', close:'exclamation', blocked:'faceAngry' },
+    defensive:  { wallBig:'idea',  close:'exclamation', blocked:'question' },
+    strategist: { wallBig:'idea',  close:'stars',       blocked:'dots1' },
+  };
+  const MINIMAX_BUDGET_MS = 60;
+  let MM_ON=true, MM_AW=2, MM_WW=0.3, MM_WALLS=4, MM_MOVES=4, MM_TOTAL=8, MM_REPLY_WALLS=5;
+  const ADAPT_MIN = 0.03, ADAPT_MAX = 0.55, ADAPT_STEP = 0.05, ADAPT_START = 0.28;
+  let explainOn = readPref('quoridor_explain') !== '0';
+  function adaptiveEnabled(){ return readPref('quoridor_adaptive') === '1'; }
+  function adaptiveRandomness(){
+    const v = parseFloat(readPref('quoridor_adaptive_rand'));
+    return isFinite(v) ? Math.min(ADAPT_MAX, Math.max(ADAPT_MIN, v)) : ADAPT_START;
+  }
+  function adaptiveWallChance(rnd){ return 0.12 + (ADAPT_MAX-rnd)/(ADAPT_MAX-ADAPT_MIN)*0.58; }   // de .12 (principiante) a .70
+  function adaptiveLevelPct(){ return Math.round((ADAPT_MAX-adaptiveRandomness())/(ADAPT_MAX-ADAPT_MIN)*100); }
+  // Una vez por partida contra la IA: con los últimos 5 resultados, 4 o más victorias suben la exigencia y 1 o menos la bajan.
+  function updateAdaptiveAfterGame(){
+    const rec = statsData.recentVsCpu || [];
+    if(rec.length < 3) return;
+    const wins = rec.reduce((s,v)=> s+(v?1:0), 0);
+    let rnd = adaptiveRandomness();
+    if(wins >= 4) rnd -= ADAPT_STEP;
+    else if(wins <= 1) rnd += ADAPT_STEP;
+    rnd = Math.round(Math.min(ADAPT_MAX, Math.max(ADAPT_MIN, rnd))*100)/100;
+    writePref('quoridor_adaptive_rand', rnd);
+  }
+  function botProfileFor(idx){
     const bot=state.players[idx], difficulty=bot.difficulty||'easy';
-    const profiles={easy:{wallChance:.12,randomness:.55,personality:'speed'},normal:{wallChance:.32,randomness:.28,personality:'speed'},hard:{wallChance:.58,randomness:.12,personality:'aggressive'},expert:{wallChance:.82,randomness:.04,personality:'strategist'}};
-    const profile=Object.assign({}, profiles[difficulty]||profiles.easy);
+    const profile=Object.assign({}, BOT_PROFILES[difficulty]||BOT_PROFILES.easy);
+    if(state.adaptiveOn){
+      const rnd = adaptiveRandomness();
+      profile.randomness = rnd;
+      profile.wallChance = adaptiveWallChance(rnd);
+      profile.personality = rnd>0.3 ? 'speed' : (rnd>0.12 ? 'aggressive' : 'strategist');
+    }
     if(state.campaign && state.campaignPersonality){
       profile.personality=state.campaignPersonality;
       if(profile.personality==='defensive') profile.wallChance=Math.min(.9,profile.wallChance+.2);
       else if(profile.personality==='aggressive') profile.wallChance=Math.min(.9,profile.wallChance+.1);
       else if(profile.personality==='speed') profile.wallChance=Math.max(.05,profile.wallChance-.1);
     }
+    return profile;
+  }
+  function botEmoteFor(idx,kind){
+    const t = BOT_EMOTES[botProfileFor(idx).personality] || BOT_EMOTES.speed;
+    return t[kind];
+  }
+  function wallReason(oppIdx,oldD,newD){
+    const o=state.players[oppIdx];
+    const who = (state.players.length===2 && !o.isCPU) ? 'tu camino' : 'el camino de '+o.name;
+    return `Puse una pared porque ${who} era más corto: de ${oldD} pasó a ${newD} pasos.`;
+  }
+  function moveReason(after){
+    if(after===0) return '¡Llegué al centro!';
+    return `Avancé por el camino más corto: me ${after===1 ? 'falta 1 paso' : 'faltan '+after+' pasos'} para el centro.`;
+  }
+
+  // ---------- Gestión de paredes (77) ----------
+  // La IA sólo gasta una pared si la ganancia alcanza el mínimo de su nivel (2 en Normal, 1 en el resto) y guarda una
+  // reserva del 30% de las paredes iniciales hasta que el rival esté a 3 pasos de la meta. A 2 pasos acepta cualquier ganancia.
+  function chooseBotWall(idx,bot,oppIdx,oppDist,knownEdges){
+    const urgent = oppDist<=2;
+    const start = bot.wallsStart || bot.wallsLeft;
+    const reserve = Math.ceil(start*0.3);
+    if(!urgent && oppDist>3 && bot.wallsLeft<=reserve) return null;
+    const cands = collectWallCandidates(oppIdx,oppDist,null,knownEdges,idx);
+    if(!cands.length) return null;
+    const minGain = urgent ? 1 : (bot.difficulty==='normal' ? 2 : 1);
+    const gain = cands[0].gain;
+    if(gain<minGain) return null;
+    const top = cands.filter(x=>x.gain===gain);
+    return top[Math.floor(botRand()*top.length)];
+  }
+
+  // ---------- Búsqueda de 2 jugadas (76) ----------
+  // Minimax con poda alfa-beta: mis 8 mejores acciones y, por cada una, las 8 mejores respuestas del rival.
+  // Evaluación: 2 * distancia del rival - distancia mía + 0,3 * (mis paredes - sus paredes). El 2 sobre la distancia del rival
+  // sale de medirlo en el torneo: con peso 1 Experto perdía fuerza en 11x11 (58% contra Difícil) y con 2 sube a 68%-72%. Presupuesto de 60 ms;
+  // si no alcanza a evaluar ninguna acción, devuelve null y se usa la heurística de siempre. Sólo Experto en 1v1 clásico.
+  function canMinimax(bot){
+    return MM_ON && bot.difficulty==='expert' && !state.adaptiveOn && state.ruleset==='classic' && state.players.length===2 && !state.teams && !state.isDaily;
+  }
+  function wallSlotFreeHypo(r,c,o,extra){
+    if(!canPlaceWallSlot(r,c,o)) return false;
+    for(const w of extra){
+      if(w.r===r && w.c===c) return false;
+      if(w.o===o){
+        if(o==='h' && w.r===r && Math.abs(w.c-c)===1) return false;
+        if(o==='v' && w.c===c && Math.abs(w.r-r)===1) return false;
+      }
+    }
+    return true;
+  }
+  // Mejor respuesta del rival (la que minimiza mi valor). Poda en cuanto una respuesta ya no deja superar a `alpha`.
+  function mmOppReply(mask,size,cen,mPos,oPos,myW,opW,extra,alpha){
+    const dm = buildDistMap(mask,size,[cen]);
+    const myD = dm[mPos], opD = dm[oPos];
+    const r0=(oPos/size)|0, c0=oPos-r0*size, m0=mask[oPos], steps=[];
+    for(let k=0;k<4;k++){          // pasos del rival (sin saltos: aproximación; si pisa mi casilla se descarta)
+      if(m0&(1<<k)) continue;
+      const nr=r0+DIRS4[k][0], nc=c0+DIRS4[k][1];
+      if(nr<0||nc<0||nr>=size||nc>=size) continue;
+      const nx=nr*size+nc;
+      if(nx===mPos) continue;
+      steps.push({ pos:nx, key:dm[nx] });
+    }
+    steps.sort((a,b)=>a.key-b.key);
+    const walls=[];
+    if(opW>0 && myD>0){            // paredes del rival: sólo las que tocan mis caminos mínimos
+      const dag = shortestPathDag(mask,size,dm,mPos);
+      const pr=(mPos/size)|0, pc=mPos-pr*size;
+      for(let r=Math.max(0,pr-3);r<=Math.min(size-2,pr+3);r++) for(let c=Math.max(0,pc-3);c<=Math.min(size-2,pc+3);c++) for(const o of ['h','v']){
+        const we = wallEdges(r,c,o);
+        if(!wallHitsDag(we,size,dag)) continue;
+        if(!wallSlotFreeHypo(r,c,o,extra)) continue;
+        const undo = applyEdgesToMask(mask,size,we);
+        let nm, no;
+        try{
+          nm = bfsToGoal(mask,size,mPos,cen,null);
+          no = nm===Infinity ? Infinity : bfsToGoal(mask,size,oPos,cen,null);
+        } finally { undoMask(mask,undo); }
+        if(nm===Infinity || no===Infinity || nm<=myD) continue;
+        walls.push({ nm, no, gain:nm-myD });
+      }
+      walls.sort((a,b)=>b.gain-a.gain);
+    }
+    let worst = Infinity;
+    for(const s of steps.slice(0,3)){
+      const val = s.pos===cen ? -10000 : (MM_AW*s.key - myD + MM_WW*(myW-opW));
+      if(val<worst) worst=val;
+      if(worst<=alpha) return worst;
+    }
+    for(const w of walls.slice(0,MM_REPLY_WALLS)){
+      const val = MM_AW*w.no - w.nm + MM_WW*(myW-(opW-1));
+      if(val<worst) worst=val;
+      if(worst<=alpha) return worst;
+    }
+    if(worst===Infinity) worst = MM_AW*opD - myD + MM_WW*(myW-opW);
+    return worst;
+  }
+  function minimaxDecision(idx,budgetMs){
+    const t0=performance.now();
+    const size=state.size, cen=centerGoal(), me=state.players[idx], oi=1-idx, opp=state.players[oi];
+    if(!opp || !state.validMoves.length) return null;
+    const base = edgeMaskFor(state.blockedEdges,size).slice();
+    const myStart=me.r*size+me.c, opStart=opp.r*size+opp.c;
+    const dm0 = buildDistMap(base,size,[cen]);
+    const opD0 = dm0[opStart];
+    const moves = state.validMoves.map(m=>({ type:'move', r:m.r, c:m.c, key:dm0[m.r*size+m.c] })).sort((a,b)=>a.key-b.key);
+    if(moves[0].key===0) return { type:'move', r:moves[0].r, c:moves[0].c, algo:'minimax', reason:moveReason(0), ms:performance.now()-t0 };
+    const walls = me.wallsLeft>0 ? collectWallCandidates(oi,opD0,null,null,idx).slice(0,MM_WALLS) : [];
+    const actions = moves.slice(0,Math.max(MM_MOVES,MM_TOTAL-walls.length));
+    walls.forEach(w=> actions.push({ type:'wall', r:w.r, c:w.c, orientation:w.orientation, gain:w.gain, newOppDist:w.newOppDist }));
+    let bestVal=-Infinity, best=[], evaluated=0;
+    for(const a of actions){
+      if(evaluated>0 && performance.now()-t0>budgetMs) break;
+      let mPos=myStart, undo=null, myW=me.wallsLeft;
+      const extra=[];
+      if(a.type==='move') mPos = a.r*size+a.c;
+      else { undo = applyEdgesToMask(base,size,wallEdges(a.r,a.c,a.orientation)); extra.push({ r:a.r, c:a.c, o:a.orientation }); myW -= 1; }
+      let val;
+      try{
+        val = mPos===cen ? 10000 : mmOppReply(base,size,cen,mPos,opStart,myW,opp.wallsLeft,extra,bestVal-1e-9);
+      } finally { if(undo) undoMask(base,undo); }
+      evaluated++;
+      if(val>bestVal+1e-9){ bestVal=val; best=[a]; }
+      else if(Math.abs(val-bestVal)<=1e-9) best.push(a);
+    }
+    if(!best.length) return null;
+    const a = best[Math.floor(botRand()*best.length)];
+    const ms = performance.now()-t0;
+    if(a.type==='wall') return { type:'wall', r:a.r, c:a.c, orientation:a.orientation, gain:a.gain, algo:'minimax', ms,
+      reason:wallReason(oi,opD0,a.newOppDist) };
+    return { type:'move', r:a.r, c:a.c, algo:'minimax', ms, reason:moveReason(a.key) };
+  }
+
+  function botPlanMove(idx){
+    const bot=state.players[idx];
+    const profile=botProfileFor(idx);
     if(state.ruleset==='hill') return botPlanHill(idx, profile);
     if(state.ruleset==='hunter') return idx===state.fugitiveIdx ? botPlanFugitive(idx, profile) : botPlanHunter(idx, profile);
     // En niebla de guerra la IA razona sólo con lo que su propio radio (o su memoria) le muestra, nunca con
     // el estado real completo: así no tiene ventaja sobre un humano jugando la misma partida.
     const knownEdges = state.ruleset==='fog' ? botKnownEdges(idx) : state.blockedEdges;
+    if(canMinimax(bot) && botRand()>=profile.randomness){
+      const mm = minimaxDecision(idx, MINIMAX_BUDGET_MS);
+      if(mm) return mm;
+    }
     const oppIdx = otherPlayerClosestToCenter(idx, knownEdges);
-    if(bot.wallsLeft>=mirrorWallCost()&&oppIdx!=null){
-      const myDist=state.teams ? teamEta(teamOf(idx)) : distanceToCenter(bot.r,bot.c,knownEdges),oppDist=distanceToCenter(state.players[oppIdx].r,state.players[oppIdx].c,knownEdges);
-      if(oppDist<=myDist+1&&Math.random()<profile.wallChance){ const w=findBestBlockingWall(oppIdx,oppDist,null,knownEdges,idx); if(w)return {type:'wall',r:w.r,c:w.c,orientation:w.orientation}; }
+    if(bot.wallsLeft>0&&oppIdx!=null){
+      const myDist=state.teams ? teamEta(teamOf(idx)) : distanceToCenter(bot.r,bot.c,knownEdges,idx), oppDist=distanceToCenter(state.players[oppIdx].r,state.players[oppIdx].c,knownEdges,oppIdx);
+      if(oppDist<=myDist+1&&botRand()<profile.wallChance){
+        const w = chooseBotWall(idx,bot,oppIdx,oppDist,knownEdges);
+        if(w) return { type:'wall', r:w.r, c:w.c, orientation:w.orientation, gain:w.gain, algo:'heurística', reason:wallReason(oppIdx,oppDist,w.newOppDist) };
+      }
     }
     const moves=state.validMoves; if(!moves.length)return {type:'move',r:bot.r,c:bot.c};
-    if(state.ruleset==='party'){ const detour = botPartyTokenMove(idx, moves); if(detour) return {type:'move',r:detour.r,c:detour.c}; }
+    if(state.ruleset==='party'){ const detour = botPartyTokenMove(idx, moves); if(detour) return {type:'move',r:detour.r,c:detour.c,algo:'heurística',reason:'Fui a buscar un poder.'}; }
     const scored=moves.map(m=>({m,score:scoreBotMove(idx,m,profile.personality,knownEdges)})).sort((a,b)=>b.score-a.score);
-    const choice=Math.random()<profile.randomness?scored[Math.floor(Math.random()*Math.min(3,scored.length))]:scored[0];
-    return {type:'move',r:choice.m.r,c:choice.m.c};
+    const choice=botRand()<profile.randomness?scored[Math.floor(botRand()*Math.min(3,scored.length))]:scored[0];
+    const after = distanceToCenter(choice.m.r,choice.m.c,knownEdges,idx);
+    return {type:'move',r:choice.m.r,c:choice.m.c,algo:'heurística',reason:moveReason(after),after};
   }
   function scheduleBotTurnIfNeeded(){
+    if(HEADLESS) return;
     if(!state || state.winner) return;
     const cp = state.players[state.currentPlayerIndex];
     if(!cp || !cp.isCPU) return;
     const myToken = ++botToken;
-    // en Contrarreloj la IA piensa menos (300-600 ms en vez de 550-1000 ms)
-    const range = state.ruleset==='blitz' ? BOT_THINK_BLITZ_MS : BOT_THINK_MS;
-    const thinkMs = range[0] + Math.random()*(range[1]-range[0]);
+    // en Contrarreloj la IA piensa menos (300-600 ms en vez de 550-1000 ms); con reloj de ajedrez el tiempo
+    // de pensar se descuenta del banco, así que ahí todas piensan igual
+    let range = state.ruleset==='blitz' ? BOT_THINK_BLITZ_MS : BOT_THINK_MS;
+    if(!state.clockMode && state.ruleset!=='blitz'){
+      range = BOT_THINK_BY_PERSONALITY[botProfileFor(state.currentPlayerIndex).personality] || range;
+    }
+    const thinkMs = range[0] + botRand()*(range[1]-range[0]);
     hintLine.textContent = 'La IA está pensando…';
     hintLine.classList.add('thinking');
     startThinking(state.currentPlayerIndex);
@@ -2803,18 +3811,215 @@
   }
   // Una acción completa de la IA. Aparte del temporizador para poder ejercitarla en las pruebas.
   function botAct(idxNow){
+    if(botMaybePie(idxNow)) return;      // regla del pastel: la IA puede quedarse con la posición adelantada
     if(state.ruleset==='party'){
       const forced = botPartyPowers(idxNow);        // puede gastar un poder "gratis" o decidir un Paso doble
       if(forced){ performMove(forced.r, forced.c); return; }
     }
+    const t0 = performance.now(), bfs0 = BFS_STATS.calls;
     const decision = botPlanMove(idxNow);
+    AI_DEBUG.last = { ms:performance.now()-t0, bfs:BFS_STATS.calls-bfs0, algo:decision.algo||'otra', type:decision.type,
+      reason:decision.reason||'', move:state.moveCount||0, seed:state.botSeed };
+    updateDebugPanel();
     if(decision.type==='move') performMove(decision.r, decision.c);
     else commitWall(decision.r, decision.c, decision.orientation);
+    afterBotAction(idxNow, decision);
+  }
+  // Después de jugar: explicación en pantalla (80) y reacción con emote según la personalidad (78, 92).
+  function afterBotAction(idx,decision){
+    if(HEADLESS || !state || state.winner || !state.players[idx]) return;
+    const bot = state.players[idx];
+    if(explainOn && decision.reason && state.isCpuGame && state.players.length===2 && !state.adaptiveOn
+       && (bot.difficulty==='easy' || bot.difficulty==='normal') && (statsData.totalGames||0) < 12){
+      hintLine.textContent = '🤖 ' + decision.reason;
+    }
+    if(idx===1 && state.isCpuGame){
+      if(decision.type==='wall' && (decision.gain||0)>=3) cpuReact(botEmoteFor(idx,'wallBig'));
+      else if(decision.type==='move' && !state._closeEmoted && distanceToCenter(bot.r,bot.c,state.blockedEdges)===1){
+        state._closeEmoted = true;
+        cpuReact(botEmoteFor(idx,'close'));
+      }
+    }
   }
   function chargeBotThinkTime(idx, ms){
     state.clock[idx] = Math.max(0, state.clock[idx] - ms/1000);
     if(state.clock[idx] <= 0){ flagFall(idx); return false; }
     return true;
+  }
+
+  // ---------- Panel de depuración (87): se activa con ?debug en la dirección ----------
+  const AI_DEBUG = { on: /[?&]debug(=|&|$)/.test(location.search), last:null, el:null };
+  function updateDebugPanel(){
+    if(!AI_DEBUG.on || HEADLESS) return;
+    if(!AI_DEBUG.el){
+      const el = document.createElement('div');
+      el.id = 'aiDebug';
+      el.style.cssText = 'position:fixed;left:6px;bottom:6px;z-index:9999;max-width:92vw;padding:6px 8px;border-radius:8px;background:rgba(0,0,0,.78);color:#9fe870;font:11px/1.35 monospace;pointer-events:none;white-space:pre-wrap';
+      document.body.appendChild(el);
+      AI_DEBUG.el = el;
+    }
+    const d = AI_DEBUG.last;
+    if(!d){ AI_DEBUG.el.textContent = 'IA: sin jugadas todavía'; return; }
+    AI_DEBUG.el.textContent = `IA ${d.algo} · ${d.type==='wall'?'pared':'movimiento'} · jugada ${d.move}\n${d.ms.toFixed(1)} ms · ${d.bfs} BFS · semilla ${d.seed}\n${d.reason}`;
+  }
+
+  // ---------- Pista (89) y camino del rival (93) ----------
+  const HINT_COST = 15, HINT_MAX = 3, PATH_MAX = 5;
+  const hintBtn = document.getElementById('hintBtn');
+  const pathBtn = document.getElementById('pathBtn');
+  const assistRow = document.getElementById('assistRow');
+  const hintGroupEl = document.getElementById('hintGroup');
+  const ASSIST_RULESETS = ['classic','blitz','mirror','maze'];   // sin niebla (delataría lo oculto) ni modos con reglas propias
+  function assistAllowed(){
+    return !!state && !state.winner && state.isCpuGame && state.players.length===2 && !state.isDaily && ASSIST_RULESETS.indexOf(state.ruleset)>=0;
+  }
+  function updateAssistBtns(){
+    if(!assistRow) return;
+    const ok = assistAllowed();
+    assistRow.classList.toggle('hidden', !ok);
+    if(!ok) return;
+    const cp = state.players[state.currentPlayerIndex];
+    const human = !!cp && !cp.isCPU;
+    const hl = HINT_MAX-(state.hintsUsed||0), pl = PATH_MAX-(state.pathUses||0);
+    hintBtn.disabled = !human || hl<=0;
+    pathBtn.disabled = !human || pl<=0;
+    hintBtn.innerHTML = `💡 Pista · ${HINT_COST} 🪙 (${hl})`;
+    pathBtn.innerHTML = `👁️ Camino rival (${pl})`;
+  }
+  function clearHintMarks(){ if(hintGroupEl) hintGroupEl.innerHTML = ''; }
+  function computeHint(idx){
+    const me = state.players[idx];
+    let dec = (state.ruleset==='classic') ? minimaxDecision(idx, 80) : null;
+    if(dec) return dec;
+    const oppIdx = otherPlayerClosestToCenter(idx);
+    const scored = state.validMoves.map(m=>({ m, score:scoreBotMove(idx,m,'strategist') })).sort((a,b)=>b.score-a.score);
+    if(!scored.length) return null;
+    dec = { type:'move', r:scored[0].m.r, c:scored[0].m.c };
+    if(me.wallsLeft>0 && oppIdx!=null){
+      const od = distanceToCenter(state.players[oppIdx].r, state.players[oppIdx].c, state.blockedEdges);
+      const cands = collectWallCandidates(oppIdx, od, null, null, idx);
+      if(cands.length && cands[0].gain>=2) dec = { type:'wall', r:cands[0].r, c:cands[0].c, orientation:cands[0].orientation };
+    }
+    return dec;
+  }
+  function drawHint(h){
+    const cs = cellSize();
+    if(h.type==='move'){
+      hintGroupEl.innerHTML = `<circle cx="${(h.c+0.5)*cs}" cy="${(h.r+0.5)*cs}" r="${cs*0.36}" fill="rgba(255,214,10,.28)" stroke="#f5b800" stroke-width="3" stroke-dasharray="6 5"/>`;
+    } else {
+      const rc = wallRect(h.r,h.c,h.orientation,cs);
+      hintGroupEl.innerHTML = `<rect x="${rc.x}" y="${rc.y}" width="${rc.w}" height="${rc.h}" rx="${Math.min(rc.w,rc.h)*0.4}" fill="rgba(255,214,10,.5)" stroke="#f5b800" stroke-width="2.5" stroke-dasharray="5 4"/>`;
+    }
+  }
+  // El anuncio recompensado lo provee la capa nativa a través del puente AndroidAds (ver requestRewardedAd más arriba).
+  // Mientras no exista, la pista se paga sólo con monedas.
+  function showRewardedAd(cb){
+    // cb(true) sólo si el anuncio se completó; los avisos de cierre/fallo los muestra requestRewardedAd.
+    requestRewardedAd('hint', ()=> cb(true));
+  }
+  function deliverHint(payFn){
+    if(!state || state.winner || !assistAllowed()) return false;
+    const idx = state.currentPlayerIndex;
+    if(state.players[idx].isCPU) return false;
+    const h = computeHint(idx);
+    if(!h){ showToast('Ahora no encuentro una jugada para sugerir.'); return false; }
+    if(payFn) payFn();
+    state.hintsUsed = (state.hintsUsed||0) + 1;
+    drawHint(h);
+    hintLine.textContent = h.type==='move'
+      ? '💡 Pista: la mejor jugada es moverte a la casilla marcada.'
+      : `💡 Pista: poné la pared ${h.orientation==='h'?'horizontal':'vertical'} marcada para frenar al rival.`;
+    updateAssistBtns();
+    return true;
+  }
+  if(hintBtn) hintBtn.addEventListener('click', ()=>{
+    if(!assistAllowed()) return;
+    const idx = state.currentPlayerIndex;
+    if(state.players[idx].isCPU) return;
+    if((state.hintsUsed||0) >= HINT_MAX){ showToast(`Ya usaste las ${HINT_MAX} pistas de esta partida.`); return; }
+    if(wallet.coins >= HINT_COST){
+      deliverHint(()=>{ addCoins(-HINT_COST, { silent:true }); });
+      return;
+    }
+    const missing = HINT_COST - wallet.coins;
+    if(adsAvailable()){
+      showConfirm(`Te faltan ${missing} monedas para una pista. ¿Ver un anuncio para recibirla gratis?`, ()=>{
+        showRewardedAd(ok=>{
+          if(ok) deliverHint(null);
+          else showToast('No se completó el anuncio: no hay pista.');
+        });
+      });
+    } else {
+      showToast(`Una pista cuesta ${HINT_COST} monedas y te faltan ${missing}. Ganale a la IA o resolvé el desafío diario para juntar.`);
+    }
+  });
+  function showRivalPath(){
+    if(!assistAllowed()) return false;
+    const idx = state.currentPlayerIndex;
+    if(state.players[idx].isCPU) return false;
+    const oi = otherPlayerClosestToCenter(idx);
+    if(oi==null) return false;
+    const size=state.size, cen=centerGoal(), cs=cellSize();
+    const rowsGoal = state.goalMode==='rows';
+    const mask = edgeMaskFor(state.blockedEdges,size);
+    const dm = rowsGoal ? buildDistMap(mask,size,hillGoalIdx(goalCells(oi))) : liveDistMap(state.blockedEdges,size,'c',[cen]);
+    const o = state.players[oi];
+    let cur = o.r*size+o.c, guard = 0;
+    const pts = [cur];
+    while(dm[cur]>0 && guard++<500){
+      const r=(cur/size)|0, c=cur-r*size, m=mask[cur];
+      let nxt=-1;
+      for(let k=0;k<4;k++){
+        if(m&(1<<k)) continue;
+        const nr=r+DIRS4[k][0], nc=c+DIRS4[k][1];
+        if(nr<0||nc<0||nr>=size||nc>=size) continue;
+        const nx=nr*size+nc;
+        if(dm[nx]===dm[cur]-1){ nxt=nx; break; }
+      }
+      if(nxt<0) break;
+      cur = nxt; pts.push(cur);
+    }
+    const poly = pts.map(p=> (((p%size)+0.5)*cs).toFixed(1)+','+((((p/size)|0)+0.5)*cs).toFixed(1)).join(' ');
+    hintGroupEl.innerHTML = `<polyline points="${poly}" fill="none" stroke="${o.color}" stroke-width="${cs*0.12}" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="${cs*0.18} ${cs*0.2}" opacity=".85"/>`;
+    return true;
+  }
+  let pathHolding = false;
+  function releasePath(){
+    if(!pathHolding) return;
+    pathHolding = false;
+    clearHintMarks();
+    updateAssistBtns();
+  }
+  if(pathBtn){
+    pathBtn.addEventListener('pointerdown', e=>{
+      e.preventDefault();
+      if(pathBtn.disabled || (state && (state.pathUses||0) >= PATH_MAX)) return;
+      if(showRivalPath()){ state.pathUses = (state.pathUses||0) + 1; pathHolding = true; }
+    });
+    ['pointerup','pointercancel','pointerleave'].forEach(ev=> pathBtn.addEventListener(ev, releasePath));
+    pathBtn.addEventListener('contextmenu', e=> e.preventDefault());
+  }
+
+  // ---------- Momento clave (90): la jugada que más cambió la ventaja en pasos ----------
+  const KEY_RULESETS = ['classic','blitz','mirror','maze','fog'];
+  function keyMomentsOn(){ return !!state && state.players.length===2 && KEY_RULESETS.indexOf(state.ruleset)>=0 && !state.isDaily; }
+  function stepGap(idx){
+    const oi = otherPlayerClosestToCenter(idx, state.blockedEdges);
+    if(oi==null) return 0;
+    const me=state.players[idx], o=state.players[oi];
+    return distanceToCenter(o.r,o.c,state.blockedEdges) - distanceToCenter(me.r,me.c,state.blockedEdges);
+  }
+  function logKeyMoment(idx,type,gapBefore){
+    if(HEADLESS || !state.keyMoments) return;
+    state.keyMoments.push({ n:(state.moveCount||0)+1, idx, type, swing: stepGap(idx)-gapBefore });
+  }
+  function keyMomentText(){
+    if(!keyMomentsOn() || !state.keyMoments || !state.keyMoments.length) return '';
+    let best = null;
+    state.keyMoments.forEach(k=>{ if(!best || k.swing>best.swing) best=k; });
+    if(!best || best.swing<2) return '';
+    const who = state.players[best.idx].name;
+    return `Momento clave: en la jugada ${best.n}, ${who} ${best.type==='wall'?'puso una pared':'se movió'} y sacó ${best.swing} pasos de ventaja.`;
   }
 
   function teamOf(playerId){
@@ -2845,6 +4050,7 @@
   }
   function finishGame(p, resultTag, reason){
     state.winner = p;
+    if(HEADLESS) return;
     state.resultTag = resultTag || null;
     // Cazador y fugitivo: por qué terminó ('caught' atrapado · 'timeout' se acabaron las rondas · 'escaped' llegó al centro)
     state.endReason = reason || (state.ruleset==='hunter' ? 'escaped' : null);
@@ -2857,9 +4063,12 @@
     let fresh = [];
     let reward;
     if(state.isDaily){
-      const res = recordDailyResult(state.moveCount, state.dailyPar);
+      const info = dailyInfoOf(state);
+      const stars = dailyStars(state.moveCount, state.dailyPar, info.slack);
+      const res = recordDailyResult(info.dateKey, state.moveCount, state.dailyPar, { stars, mode:info.id, size:state.size, timeouts:state.dailyTimeouts||0 });
       fresh = res.fresh;
-      reward = dailyReward(res, state.moveCount, state.dailyPar);
+      reward = dailyReward(res, state.moveCount, state.dailyPar, info.dateKey, info.slack);
+      reward.streakInfo = res;
     } else {
       fresh = recordGameResult({
         winnerSlot: creditedSlot(p),
@@ -2872,8 +4081,10 @@
         movesUsed: state.moveCount,
         totalMovesThisGame: state.moveCount,
         wallsPlacedThisGame: state.walls.filter(w=>!w.env).length,
+        seatInfo: (state.seatMeasured && !(state.pie && state.pie.swapped) && !state.resultTag) ? { firstIdx: state.firstIdx, winnerSeat: state.startSeat[p.id] } : null,
         capturedByHuman: state.ruleset==='hunter' && state.endReason==='caught' && !p.isCPU,
         escapedByHuman: state.ruleset==='hunter' && state.endReason==='escaped' && !p.isCPU,
+        campaign: !!state.campaign, adaptive: !!state.adaptiveOn,
       }, { toast:false });
       reward = gameReward(p);
     }
@@ -2944,6 +4155,7 @@
     const w = state.walls.splice(wi,1)[0];
     state.occupied[w.r][w.c] = null;
     wallEdges(w.r,w.c,w.orientation).forEach(e=> state.blockedEdges.delete(edgeKey(e[0],e[1],e[2],e[3])));
+    edgesEpoch++;
     return w;
   }
   // ¿Puede `p` llevarse este poder? (guardados: máximo PARTY_MAX_HELD y sin repetidos; Pared extra: tope por partida)
@@ -2975,7 +4187,7 @@
     }
     state.party.stats.picked[t.type] = (state.party.stats.picked[t.type]||0) + 1;
     state.powerUp = null;
-    state.party.nextSpawn = state.party.round + PARTY_RESPAWN_MIN + Math.floor(Math.random()*2);
+    state.party.nextSpawn = state.party.round + PARTY_RESPAWN_MIN + Math.floor(rng()*2);
     return true;
   }
 
@@ -3028,7 +4240,7 @@
     if(!cands.length) return null;
     const best = Math.min(...cands.map(x=> x.score));
     const pool = cands.filter(x=> x.score<=best+1);
-    return pool[Math.floor(Math.random()*pool.length)];
+    return pool[Math.floor(rng()*pool.length)];
   }
   // Prueba con el alcance normal y, si el líder quedaría con ventaja de más de un paso, con un poco más de alcance.
   // Si aun así no hay una casilla pareja, el poder espera a la ronda siguiente (a la tercera espera se tolera hasta 2 pasos de ventaja).
@@ -3059,7 +4271,7 @@
       total += w;
     });
     if(!pool.length) return 'escudo';
-    let roll = Math.random()*total;
+    let roll = rng()*total;
     for(const x of pool){ roll -= x.w; if(roll<=0) return x.k; }
     return pool[pool.length-1].k;
   }
@@ -3084,7 +4296,7 @@
         partyEvent(`💨 ${def.emoji} ${def.name} se desvaneció del tablero.`);
         state.powerUp = null;
         P.stats.vanished += 1;
-        P.nextSpawn = P.round + PARTY_RESPAWN_MIN + Math.floor(Math.random()*2);
+        P.nextSpawn = P.round + PARTY_RESPAWN_MIN + Math.floor(rng()*2);
       }
     }
     if(!state.powerUp && P.round>=P.nextSpawn) partySpawn();
@@ -3253,7 +4465,7 @@
     const oppIdx = otherPlayerClosestToCenter(idx, edges);
     const dOpp = oppIdx!=null ? partyDist(oppIdx) : Infinity;
     // 1) Aturdir: cuando el rival me alcanza o está por ganar
-    if(has('aturdido') && Math.random()<luck){
+    if(has('aturdido') && rng()<luck){
       const t = partyStunTarget(idx);
       if(t!=null){
         const dT = partyDist(t);
@@ -3261,20 +4473,20 @@
       }
     }
     // 2) Romper pared: si me ahorra camino de verdad (la IA más floja exige más)
-    if(has('romper_pared') && Math.random()<luck){
+    if(has('romper_pared') && rng()<luck){
       const c = partyBreakChoice(idx);
       if(c && c.gain >= ((bot.difficulty||'easy')==='easy' ? 2 : 1) && partyUse(idx,'romper_pared')) return null;
     }
     // 3) Escudo: sólo si algún rival guarda un Aturdir
-    if(has('escudo') && bot.fx.shield===0 && Math.random()<luck && state.players.some((pl,i)=> i!==idx && pl.powers.indexOf('aturdido')>=0)){
+    if(has('escudo') && bot.fx.shield===0 && rng()<luck && state.players.some((pl,i)=> i!==idx && pl.powers.indexOf('aturdido')>=0)){
       if(partyUse(idx,'escudo')) return null;
     }
     // 4) Turno extra: en la recta final o cuando la carrera está pareja
-    if(has('turno_extra') && Math.random()<luck && (dMe<=3 || dOpp<=dMe)){
+    if(has('turno_extra') && rng()<luck && (dMe<=3 || dOpp<=dMe)){
       if(partyUse(idx,'turno_extra')) return null;
     }
     // 5) Paso doble: sólo si el salto queda mejor que cualquier paso normal
-    if(has('paso_doble') && Math.random()<luck){
+    if(has('paso_doble') && rng()<luck){
       const sp = state.validMoves.filter(m=> m.sprint);
       const normal = state.validMoves.filter(m=> !m.sprint && !m.push && !m.swap);
       if(sp.length && normal.length){
@@ -3308,13 +4520,165 @@
     return (best && bd<dTok) ? best : null;
   }
 
+
+  // ---------- Estado serializable (73) ----------
+  // blockedEdges (y, en niebla, seen[i]) son Set; el resto es JSON puro. serializeState() devuelve un objeto
+  // plano (los Set pasan a {$set:[...]}), apto para JSON.stringify, localStorage, postMessage o un worker.
+  // Lo que empieza con «_» (cachés como _hillZone) y la animación pendiente no se guardan: se recalculan.
+  function serializeState(src){
+    const s = src || state;
+    if(!s) return null;
+    const data = JSON.parse(JSON.stringify(s, function(k, v){
+      if(v instanceof Set) return { $set: Array.from(v) };
+      if(k.charAt(0)==='_') return undefined;
+      if(k==='anim') return null;
+      if(k==='winner' && v && this===s) return { $player: v.id };      // el ganador es una referencia a players[i]
+      return v;
+    }));
+    if(s===state) data.rngState = gameRng.getState();
+    return data;
+  }
+  // Inversa: acepta el objeto o su JSON en texto y devuelve un estado nuevo (no toca el estado activo).
+  function deserializeState(data){
+    const obj = (typeof data==='string') ? JSON.parse(data) : data;
+    const out = JSON.parse(JSON.stringify(obj), (k, v)=> (v && typeof v==='object' && Array.isArray(v.$set)) ? new Set(v.$set) : v);
+    if(out.winner && out.winner.$player!=null) out.winner = out.players[out.winner.$player];
+    return out;
+  }
+  // Pone un estado serializado como estado activo (y retoma el generador aleatorio donde estaba).
+  function restoreState(data){
+    state = deserializeState(data);
+    state.anim = null;
+    if(state.seed!=null){
+      gameRng = mulberry32(state.seed);
+      if(typeof state.rngState==='number') gameRng.setState(state.rngState);
+    }
+    state.validMoves = computeValidMoves(state.currentPlayerIndex);
+    return state;
+  }
+
+  // ---------- Registro de jugadas (69) ----------
+  // state.log = [{p,type,r,c,o,t}]: p jugador · type move|push|swap|sprint|wall · r,c destino (o ranura de la
+  // pared) · o orientación (sólo paredes) · t ms desde que empezó la partida. Es todo lo que hace falta
+  // para repetir la partida con la misma semilla; la pared reflejada del modo Espejo se deduce de la primera.
+  function logAction(type, r, c, o){
+    if(!state) return;
+    const e = { p: state.currentPlayerIndex, type, r, c };
+    if(o) e.o = o;
+    e.t = Math.max(0, Date.now() - (state.startedAt || Date.now()));
+    (state.log || (state.log = [])).push(e);
+  }
+  // Resumen compartible: cabecera de la partida + registro.
+  function exportGameLog(){
+    if(!state) return null;
+    return {
+      v: 1, size: state.size, ruleset: state.ruleset, seed: state.seed, players: state.players.length,
+      objective: state.objective,
+      preset: state.walls.filter(w=> w.env).map(w=> ({ r:w.r, c:w.c, o:w.orientation })),
+      log: (state.log || []).map(e=> Object.assign({}, e)),
+    };
+  }
+
+  // ---------- Deshacer (68) ----------
+  // Una vez por partida (local y contra la IA), mientras nadie haya jugado después. Sirve en cuanto la persona
+  // hace su jugada y hasta que la IA (o el siguiente jugador) mueve. Se apoya en una foto del estado tomada justo
+  // antes de la jugada: así vuelven también reloj, poderes, niebla y el generador aleatorio.
+  // Desactivado en el desafío diario y en la campaña (y en niebla con 2+ humanos, que revelaría información).
+  const UNDO_PER_GAME = 1;
+  let undoSnap = null;        // { data, after } · after = moveCount que tiene que haber para que valga
+  function undoEnabledFor(ruleset, isDaily, isCampaign, humans){
+    if(isDaily || isCampaign) return false;
+    if(ruleset==='fog' && humans>=2) return false;
+    return true;
+  }
+  function takeUndoSnapshot(){
+    undoSnap = null;
+    if(!state || !state.undoEnabled || state.undoLeft<=0 || autoPlayInFlight) return;
+    const cp = state.players[state.currentPlayerIndex];
+    if(!cp || cp.isCPU) return;
+    undoSnap = { data: serializeState(), after: (state.moveCount||0) + 1 };
+  }
+  function canUndo(){
+    return !!state && !state.winner && state.undoEnabled && state.undoLeft>0
+      && !!undoSnap && undoSnap.after===(state.moveCount||0);
+  }
+  function undoLastAction(){
+    if(!canUndo()) return false;
+    const left = state.undoLeft - 1;
+    invalidateBotTimer();                       // si la IA estaba «pensando», su jugada no sale
+    clearTurnTimer();
+    restoreState(undoSnap.data);
+    state.undoLeft = left;
+    undoSnap = null;
+    mode = 'move';
+    hideWallPreview();
+    previewSlot = null;
+    state.sprintArmed = false;
+    vibrate(10);
+    render();
+    showToast('↩ Jugada deshecha.');
+    return true;
+  }
+  // Gancho para ofrecer un deshacer extra (p. ej. al terminar un anuncio con premio): suma uno a la partida.
+  function grantExtraUndo(){
+    if(!state || !state.undoEnabled || state.winner) return false;
+    state.undoLeft += 1;
+    updateUndoBtn();
+    return true;
+  }
+  function updateUndoBtn(){
+    if(!undoBtn) return;
+    const on = !!state && state.undoEnabled;
+    undoBtn.classList.toggle('hidden', !on);
+    if(!on) return;
+    undoBtn.disabled = !canUndo();
+  }
+  if(undoBtn) undoBtn.addEventListener('click', ()=>{ undoLastAction(); });
+
+  // ---------- Tope de partida (70) ----------
+  // Sin límite propio (clásico, laberinto, espejo…), dos IA con `randomness` pueden oscilar para siempre.
+  // A las size*13 acciones (mover + poner pared) gana quien está más cerca de la meta; empata el que tiene
+  // más paredes libres. Con equipos se comparan los equipos. Cazador ya tiene su propio límite de rondas.
+  const TURN_CAP_MULT = 13;
+  function turnCapLimit(){ return state.size * TURN_CAP_MULT; }
+  function turnCapWinner(){
+    const dist = i=> distanceToCenter(state.players[i].r, state.players[i].c, state.blockedEdges);
+    const idxs = state.players.map((pl,i)=> i);
+    if(state.teams){
+      const score = k=>{
+        const ds = teamMembers(k).map(dist);
+        return { d: state.teamGoal==='both' ? Math.max.apply(null, ds) : Math.min.apply(null, ds), w: state.teams[k].wallsLeft };
+      };
+      const a = score('A'), b = score('B');
+      const k = (a.d!==b.d) ? (a.d<b.d ? 'A' : 'B') : (a.w!==b.w ? (a.w>b.w ? 'A' : 'B') : 'A');
+      return state.players[teamMembers(k).slice().sort((x,y)=> dist(x)-dist(y) || x-y)[0]];
+    }
+    idxs.sort((x,y)=> dist(x)-dist(y) || state.players[y].wallsLeft-state.players[x].wallsLeft || x-y);
+    return state.players[idxs[0]];
+  }
+  function checkTurnCap(){
+    if(!state || state.winner || state.isDaily || state.ruleset==='hunter') return;
+    const left = turnCapLimit() - (state.moveCount||0);
+    if(left<=0){
+      finishGame(turnCapWinner(), null, 'turnCap');
+      return;
+    }
+    if(left===state.players.length*2 && !state.capWarned){
+      state.capWarned = true;
+      showToast(`⏳ Quedan ${left} acciones: si nadie llega, gana quien esté más cerca del centro.`);
+    }
+  }
+
   function performMove(r,c){
     if(state.winner) return;
     const idx = state.currentPlayerIndex;
     const p = state.players[idx];
+    takeUndoSnapshot();                                          // deshacer (68): foto antes de la jugada
     if(!autoPlayInFlight && !p.isCPU) state.timeoutStreak = 0;   // una persona jugó: se corta la racha de vencimientos
     // ¿la casilla elegida es un empujón? (la jugada guarda a dónde se desliza el rival)
+    const gapBeforeKM = keyMomentsOn() ? stepGap(idx) : 0;
     const chosen = state.validMoves.find(m=> m.r===r && m.c===c);
+    logAction(chosen && chosen.push ? 'push' : chosen && chosen.swap ? 'swap' : chosen && chosen.sprint ? 'sprint' : 'move', r, c);
     const pushTo = (state.ruleset==='hill' && chosen && chosen.push) ? chosen.push : null;
     // 2v2: intercambio con el aliado. Ambos cambian de casilla (deslizan como en el empujón) y se gasta el turno.
     if(chosen && chosen.swap){
@@ -3346,6 +4710,7 @@
     }
     if(state.ruleset==='party' && chosen && chosen.sprint) partySpendSprint(p);
     p.r = r; p.c = c;
+    if(keyMomentsOn()) logKeyMoment(idx,'move',gapBeforeKM);
     state.moveCount = (state.moveCount||0) + 1;
     maybePickUpPower(p);
     if(checkWinAfterMove(p)){
@@ -3379,12 +4744,14 @@
     }
     advanceTurn();
     checkHunterTimeout();
+    checkTurnCap();
     render(idx);
   }
 
   function commitWall(r,c,orientation){
     if(state.winner) return false;
-    const evalRes = evaluateWallForMode(r,c,orientation);
+    const cpWall = state.players[state.currentPlayerIndex];
+    const evalRes = (cpWall && cpWall.wallsLeft<=0) ? { valid:false, reason:'noWalls' } : evaluateWallForMode(r,c,orientation);
     if(!evalRes.valid){
       // En niebla de guerra el preview pudo verse válido con lo poco que el jugador ve; si el estado real
       // lo rechaza (pared oculta u otra razón), no delatamos el motivo: mensaje neutro y esa ranura queda vista.
@@ -3393,27 +4760,36 @@
         if(viewerIdx!=null){ ensureFogMemory(); state.seen[viewerIdx].add(wallSlotKey(r,c,orientation)); }
         hintLine.textContent = 'No se pudo colocar la pared ahí.';
         if(activeClockKind()!=='turn') render();   // evita reiniciar sin querer un reloj de turno a mitad de jugada
+        if(!cpWall.isCPU) vibrate(ERROR_VIBRATION);
+      } else if(cpWall && !cpWall.isCPU){
+        hintLine.textContent = wallReasonText(evalRes.reason) || 'No se pudo colocar la pared ahí.';
+        vibrate(ERROR_VIBRATION);
       }
       return false;
     }
     const cp = state.players[state.currentPlayerIndex];
+    takeUndoSnapshot();                                           // deshacer (68): foto antes de la jugada
+    logAction('wall', r, c, orientation);
     if(!autoPlayInFlight && !cp.isCPU) state.timeoutStreak = 0;   // una persona jugó: se corta la racha de vencimientos
     const cpuOpp = (state.isCpuGame && !cp.isCPU && state.players[1]) ? state.players[1] : null;
-    const gapBefore = cpuOpp ? distanceToCenter(cpuOpp.r, cpuOpp.c, state.blockedEdges) - distanceToCenter(cp.r, cp.c, state.blockedEdges) : 0;
+    const gapBefore = cpuOpp ? distanceToCenter(cpuOpp.r, cpuOpp.c, state.blockedEdges, cpuOpp.id) - distanceToCenter(cp.r, cp.c, state.blockedEdges, cp.id) : 0;
+    const gapBeforeKM = keyMomentsOn() ? stepGap(state.currentPlayerIndex) : 0;
     state.occupied[r][c] = orientation;
     evalRes.edges.forEach(e=> state.blockedEdges.add(edgeKey(e[0],e[1],e[2],e[3])));
+    edgesEpoch++;
     state.walls.push({ r, c, orientation, color: cp.color, owner: state.currentPlayerIndex });
-    if(evalRes.mirrorCopies){
-      evalRes.mirrorCopies.forEach(mc=>{
-        state.occupied[mc.r][mc.c] = mc.orientation;
-        mc.edges.forEach(e=> state.blockedEdges.add(edgeKey(e[0],e[1],e[2],e[3])));
-        state.walls.push({ r:mc.r, c:mc.c, orientation:mc.orientation, color: cp.color, mirrorOf:{r,c,orientation} });
-      });
+    if(keyMomentsOn()) logKeyMoment(state.currentPlayerIndex,'wall',gapBeforeKM);
+    if(evalRes.mirrorEdges){
+      const m = mirrorSlot(r,c);
+      state.occupied[m.r][m.c] = orientation;
+      evalRes.mirrorEdges.forEach(e=> state.blockedEdges.add(edgeKey(e[0],e[1],e[2],e[3])));
+      edgesEpoch++;
+      state.walls.push({ r:m.r, c:m.c, orientation, color: cp.color });
     }
     if(cpuOpp){
       // si la pared del humano le sacó 3 o más de ventaja a la IA, la IA se enoja (con enfriamiento largo)
-      const gapAfter = distanceToCenter(cpuOpp.r, cpuOpp.c, state.blockedEdges) - distanceToCenter(cp.r, cp.c, state.blockedEdges);
-      if(gapAfter - gapBefore >= 3) cpuReact('anger');
+      const gapAfter = distanceToCenter(cpuOpp.r, cpuOpp.c, state.blockedEdges, cpuOpp.id) - distanceToCenter(cp.r, cp.c, state.blockedEdges, cp.id);
+      if(gapAfter - gapBefore >= 3) cpuReact(botEmoteFor(1,'blocked'));
     }
     if(state.hunterPool!=null && state.currentPlayerIndex!==state.fugitiveIdx){
       state.hunterPool -= 1;      // los cazadores gastan del pozo común
@@ -3422,7 +4798,7 @@
       state.teams[teamOf(cp.id)].wallsLeft -= 1;   // reserva compartida: la pared la paga el equipo
       syncTeamWalls();
     } else {
-      cp.wallsLeft -= mirrorWallCost();
+      cp.wallsLeft -= 1;
     }
     if(state.ruleset==='hunter' && state.currentPlayerIndex===state.fugitiveIdx) ageTrail();   // poner pared también es un turno del fugitivo
     if(state.lastPush) state.lastPush[state.currentPlayerIndex] = null;
@@ -3445,6 +4821,7 @@
     }
     advanceTurn();
     checkHunterTimeout();
+    checkTurnCap();
     render();
     return true;
   }
@@ -3532,6 +4909,17 @@
     const mustPause = state.timeoutStreak >= TIMEOUT_PAUSE_STREAK;
     playTone(200, 0.22, 'square', 0.13);
     vibrate(40);
+    if(state.isDaily){
+      // desafío diario (una sola ficha): el reloj NO juega por vos, porque el paso automático sería siempre el óptimo.
+      // Se pierde el turno y cuenta como un movimiento más.
+      state.moveCount = (state.moveCount||0) + 1;
+      state.dailyTimeouts = (state.dailyTimeouts||0) + 1;
+      advanceTurn();
+      render();
+      if(mustPause) pauseForInactivity();
+      else showToast('⏱️ Se acabó el tiempo: perdés el turno (+1 movimiento).');
+      return;
+    }
     autoPlayInFlight = true;
     try{ autoPlayBestMove(); } finally { autoPlayInFlight = false; }
     if(!state || state.winner) return;
@@ -3545,7 +4933,7 @@
     const moves = state.validMoves;
     if(!moves.length){ advanceTurn(); render(); return; }
     const plain = moves.filter(m=> !m.push && !m.sprint && !m.swap);   // el reloj no gasta empujones ni sprints por el jugador
-    const scored = (plain.length ? plain : moves).map(m=> ({ m, d: distanceToCenter(m.r, m.c, state.blockedEdges) }));
+    const scored = (plain.length ? plain : moves).map(m=> ({ m, d: distanceToCenter(m.r, m.c, state.blockedEdges, state.currentPlayerIndex) }));
     scored.sort((a,b)=> a.d-b.d);
     performMove(scored[0].m.r, scored[0].m.c);
   }
@@ -3743,6 +5131,8 @@
   }
 
   function render(justMovedIndex){
+    if(HEADLESS) return;
+    clearHintMarks();
     const cs = cellSize();
     updateAllFogMemory();
     const fogViewer = fogViewerIndex();
@@ -3773,8 +5163,20 @@
         gridHTML += `<rect x="${cell.c*cs}" y="${cell.r*cs}" width="${cs}" height="${cs}" fill="${fill}" opacity="${op}" class="hill-cell"/>`;
       });
     }
-    const ccx=(state.center.c+0.5)*cs, ccy=(state.center.r+0.5)*cs;
-    gridHTML += `<circle cx="${ccx}" cy="${ccy}" r="15" fill="none" stroke="var(--accent)" stroke-width="3" class="center-glow"/>`;
+    if(state.goalMode==='rows'){
+      // Clásico oficial: cada jugador tiene una franja de su color en el borde que debe alcanzar
+      state.players.forEach((pl,i)=>{
+        goalCells(i).forEach(g=>{
+          gridHTML += `<rect x="${g.c*cs}" y="${g.r*cs}" width="${cs}" height="${cs}" fill="${pl.color}" opacity="0.16" class="goal-cell"/>`;
+        });
+        const side = state.goalSides[i], B = BOARD_PX, t = 5;
+        const edge = side==='bottom' ? [0,B-t,B,t] : side==='top' ? [0,0,B,t] : side==='left' ? [0,0,t,B] : [B-t,0,t,B];
+        gridHTML += `<rect x="${edge[0]}" y="${edge[1]}" width="${edge[2]}" height="${edge[3]}" fill="${pl.color}" opacity="0.9" class="goal-edge"/>`;
+      });
+    } else {
+      const ccx=(state.center.c+0.5)*cs, ccy=(state.center.r+0.5)*cs;
+      gridHTML += `<circle cx="${ccx}" cy="${ccy}" r="15" fill="none" stroke="var(--accent)" stroke-width="3" class="center-glow"/>`;
+    }
     gridEl.innerHTML = gridHTML;
 
     const activePlayer = state.players[state.currentPlayerIndex];
@@ -3881,6 +5283,7 @@
 
     updateHeader();
     updateSidePanel();
+    updateDistChips();
     partyFlush();
     updateModeUI();
     scheduleBotTurnIfNeeded();
@@ -3914,6 +5317,11 @@
         turnIndicator.style.color = state.winner.color;
         return;
       }
+      if(state.endReason==='turnCap'){
+        turnIndicator.textContent = `Tope de partida: ganó ${state.winner.name} por cercanía`;
+        turnIndicator.style.color = state.winner.color;
+        return;
+      }
       const team = teamOf(state.winner.id);
       turnIndicator.textContent = team ? (state.teamGoal==='both' ? `¡Equipo ${team} ganó! Llegaron los dos` : `¡Equipo ${team} ganó! (${state.winner.name})`) : `¡${state.winner.name} ganó!`;
       turnIndicator.style.color = state.winner.color;
@@ -3921,7 +5329,8 @@
     }
     const cp = state.players[state.currentPlayerIndex];
     if(state.isDaily){
-      turnIndicator.textContent = `Desafío diario · ${state.moveCount||0} movimiento${(state.moveCount||0)===1?'':'s'} · par ${state.dailyPar}`;
+      const di = dailyInfoOf(state);
+      turnIndicator.textContent = `${di.emoji||'📌'} Desafío #${di.number} · ${di.label} · ${state.moveCount||0} mov. · par ${state.dailyPar}`;
       turnIndicator.style.color = cp.color;
       return;
     }
@@ -3966,10 +5375,6 @@
       const arrivedTag = p.arrived ? '<span class="cpu-tag">🏁 llegó</span>' : '';
       const stunTag = p.stunned ? `<span class="cpu-tag"><img src="${emoteIconSrc('swirl')}" alt="">aturdido</span>` : '';
       const partyTag = state.ruleset==='party' ? partyTagsHTML(p) : '';
-      const mirrorTag = state.ruleset==='mirror'
-        ? (i===state.mirrorOpenerIdx ? '<span class="cpu-tag mirror-tag" title="Abrió la partida">🪞 abre</span>'
-            : ((p.wallBonus||0)>0 ? `<span class="cpu-tag mirror-tag" title="Compensación por abrir segundo">🧱+${p.wallBonus}</span>` : ''))
-        : '';
       const hillTag = (state.ruleset==='hill')
         ? `<span class="cpu-tag">⛰️ ${p.hillTurns||0}/${hillTargetTurns()}</span><span class="cpu-tag" title="Empujones que le quedan"><img src="${emoteIconSrc('anger')}" alt="Empujones">${p.pushesLeft||0}</span>`
         : '';
@@ -3986,7 +5391,7 @@
         `<button type="button" class="emote-btn ${(emoteCooldown[i]||0)>now?'cooldown':''}" data-pid="${i}" aria-label="Emotes de ${escapeHtml(p.name)}"><img src="${emoteIconSrc('faceHappy')}" alt=""></button>`;
       return `<li class="player-row ${active?'active':''}${chess?' has-clock':''}" style="--pc:${p.color}; --pc-bg:${bg}">
         <span class="row-icon">${smallShapeSVG(p.shape,p.color,22)}</span>
-        <span class="player-name">${escapeHtml(p.name)}${cpuTag}${teamTag}${arrivedTag}${stunTag}${partyTag}${mirrorTag}${hillTag}${hunterTag}</span>
+        <span class="player-name">${escapeHtml(p.name)}${cpuTag}${teamTag}${arrivedTag}${stunTag}${partyTag}${hillTag}${hunterTag}</span>
         <span class="wall-count">${p.wallsLeft} <span class="wall-label">${sharedWalls ? 'del equipo' : 'paredes'}</span></span>
         ${emoteBtn}
         ${clockLine}
@@ -3996,16 +5401,23 @@
 
   // ---------- win overlay ----------
   function showWinOverlay(p, team){
+    const kmText = keyMomentText();
+    winKeyMoment.textContent = kmText;
+    winKeyMoment.classList.toggle('hidden', !kmText);
     const rw = state.lastReward || { coins:0, fresh:[], note:'', stars:0 };
     winTitle.style.color = p.color;
     winCard.style.setProperty('--wc', p.color);
     if(state.isDaily){
-      const par = state.dailyPar, used = state.moveCount;
+      const par = state.dailyPar, used = state.moveCount, di = dailyInfoOf(state);
       winTitle.textContent = '¡Desafío diario resuelto!';
-      winMsg.textContent = `Lo resolviste en ${used} movimiento${used===1?'':'s'} (par: ${par}). ${used<=par ? '¡Igualaste o mejoraste el par!' : 'Volvé mañana por un nuevo tablero.'}`;
+      winMsg.textContent = `${di.emoji||''} #${di.number} · ${di.label}: lo resolviste en ${used} movimiento${used===1?'':'s'} (par: ${par}). ${used<=par ? '¡Igualaste el par!' : 'Volvé mañana por un nuevo desafío.'}`;
     } else if(state.resultTag==='flag' && state.players[state.flagLoser]){
       winTitle.textContent = `¡${p.name} ganó!`;
       winMsg.textContent = `${state.players[state.flagLoser].name} se quedó sin tiempo en el reloj de ajedrez.`;
+    } else if(state.endReason==='turnCap'){
+      const cap = turnCapLimit();
+      winTitle.textContent = team ? `¡Equipo ${team} ganó por cercanía!` : `¡${p.name} ganó por cercanía!`;
+      winMsg.textContent = `Se llegó al tope de ${cap} acciones sin que nadie alcanzara la meta. Gana quien estaba más cerca del centro; si hay empate, quien conservaba más paredes.`;
     } else if(state.ruleset==='hunter'){
       const fug = state.players[state.fugitiveIdx];
       if(state.endReason==='caught'){
@@ -4018,6 +5430,9 @@
         winTitle.textContent = `¡${p.name} escapó!`;
         winMsg.textContent = `Llegó al centro en la ronda ${hunterRoundOfLastAction()} de ${state.hunterRoundLimit}, antes de que lo atraparan.`;
       }
+    } else if(state.goalMode==='rows' && !state.campaign){
+      winTitle.textContent = `¡${p.name} ganó!`;
+      winMsg.textContent = `${p.name} llegó primero al lado opuesto del tablero.`;
     } else if(state.ruleset==='hill'){
       winTitle.textContent = `¡${p.name} ganó!`;
       winMsg.textContent = `Se mantuvo ${hillTargetTurns()} turnos seguidos en la zona central. ¡Rey de la colina!`;
@@ -4033,7 +5448,7 @@
     }
     // estrellas (desafío diario: según el par)
     if(state.isDaily){
-      winStars.innerHTML = starsHTML(rw.stars || dailyStars(state.moveCount, state.dailyPar), 3, 44);
+      winStars.innerHTML = starsHTML(rw.stars || dailyStars(state.moveCount, state.dailyPar, dailyInfoOf(state).slack), 3, 44);
       winStars.classList.remove('hidden');
     } else {
       winStars.classList.add('hidden');
@@ -4052,10 +5467,20 @@
       const strip = fresh.slice(0,5).map(a=> `<img src="${medalSrc(a.medal)}" alt="">`).join('');
       html += `<div class="reward-medal"><span class="medal-strip">${strip}</span><span>${fresh.length===1 ? 'Trofeo nuevo: ' + escapeHtml(fresh[0].name) : fresh.length + ' trofeos nuevos'}<br><small>Reclamalo${fresh.length===1?'':'s'} en Trofeos</small></span></div>`;
     }
+    const si = rw.streakInfo;
+    if(si){
+      html += `<div class="reward-streak">🔥 Racha: ${si.streak} día${si.streak===1?'':'s'}</div>`;
+      if(si.protectedDays && si.protectedDays.length) html += `<div class="reward-streak shield">🛡️ ¡Tu racha se salvó! Un escudo cubrió ${si.protectedDays.length===1 ? '1 día' : si.protectedDays.length+' días'} sin jugar.</div>`;
+      if(si.broken) html += `<div class="reward-streak">Tu racha anterior se cortó: empezaste una nueva.</div>`;
+      if(si.earnedShield) html += `<div class="reward-streak shield">🛡️ ¡Escudo de racha ganado! Cubre un día que no puedas jugar (${si.shields}/${DAILY_SHIELD_MAX}).</div>`;
+      else if(si.shieldCapped) html += `<div class="reward-streak shield">🛡️ Ya tenés el máximo de escudos (${DAILY_SHIELD_MAX}).</div>`;
+    }
     if(rw.note) html += `<p class="reward-note">${escapeHtml(rw.note)}</p>`;
     winRewards.innerHTML = html;
+    shareDailyBtn.classList.toggle('hidden', !state.isDaily);
     if(rw.coins>0) countUp(document.getElementById('winCoinCount'), 0, rw.coins, 900);
     renderWinGoal();
+    refreshWinDouble();
     renderWinMapInfo();
     openOverlay('win');
     if(!state.players[creditedSlot(p)].isCPU) starRain();
@@ -4075,6 +5500,8 @@
     options = options || {};
     invalidateBotTimer();
     clearTurnTimer();
+    undoSnap = null;
+    seedGame(options.seed!=null ? options.seed : newMazeSeed());   // 71: toda la aleatoriedad de la partida sale de esta semilla
     clearEmotes();
     hideEmoteBar();
     const mid = (size-1)/2;
@@ -4089,7 +5516,7 @@
 
     const ruleset = options.ruleset || 'classic';
     const isDaily = !!options.isDaily;
-    const wallsEach = isDaily ? 0 : wallsPerPlayer(size, playersCount);
+    const wallsEach = isDaily ? 0 : wallsPerPlayer(size, playersCount, !!options.campaign);   // campaña y diario conservan la fórmula anterior
     const names = options.names || loadPlayerNames();
     const isCpu = !!options.isCpu;
     const difficulty = options.difficulty || 'easy';
@@ -4112,16 +5539,19 @@
     // 2v2 (50, 51): objetivo del equipo y sorteo de quién abre. Los niveles del editor traen sus propias reglas de paredes.
     const isTeams = ruleset==='teams' && playersCount===4;
     const teamGoal = (isTeams && options.teamGoal==='both') ? 'both' : 'first';
-    const startTeam = isTeams ? ((options.startTeam==='A' || options.startTeam==='B') ? options.startTeam : (Math.random()<0.5 ? 'A' : 'B')) : 'A';
+    const startTeam = isTeams ? ((options.startTeam==='A' || options.startTeam==='B') ? options.startTeam : (rng()<0.5 ? 'A' : 'B')) : 'A';
 
-    // Espejo (23/24): sorteo de quién abre + compensación de pared para quien abre segundo. Medido con 1000
-    // partidas/tamaño de IA experta (52.0% para quien abre, no llega al 58%) y un chequeo con IA normal (5×5
-    // sube a 63%), así que la compensación queda moderada en vez de en 0. Sólo para el 1v1 clásico del modo
-    // (con 4 jugadores el orden de turno es el habitual); tampoco aplica a niveles propios ni al desafío diario.
-    const mirrorBalance = ruleset==='mirror' && playersCount===2 && !options.isCustomLevel && !isDaily && !customPlayers;
-    const mirrorOpenerIdx = mirrorBalance
-      ? (window.__QUORIDOR_TEST__ && typeof window.__mirrorForceOpener==='number' ? window.__mirrorForceOpener : (Math.random()<0.5 ? 0 : 1))
-      : 0;
+    // Primer turno (62): se sortea quién abre y se mide por asiento. No aplica a 2v2 (tiene su propio sorteo),
+    // Cazador y fugitivo (roles fijos), diario, campaña ni niveles del editor.
+    const plainRace = !isTeams && ruleset!=='hunter' && !isDaily && !options.campaign && !options.isCustomLevel && !customPlayers && playersCount>=2;
+    let firstIdx = 0;
+    if(isTeams) firstIdx = startTeam==='B' ? 1 : 0;
+    else if(Number.isInteger(options.firstIdx) && options.firstIdx>=0 && options.firstIdx<playersCount) firstIdx = options.firstIdx;
+    else if(plainRace && lotteryOn) firstIdx = Math.floor(rng()*playersCount);
+    const lotteryApplied = plainRace && lotteryOn && !isTeams && options.firstIdx==null;
+    const goalMode = ruleset==='official' ? 'rows' : 'center';
+    const goalSides = order.map(k=> GOAL_OPPOSITE[k]);
+    const pieEnabled = pieOn && plainRace && playersCount===2 && (ruleset==='classic' || ruleset==='official') && !options.noPie;
 
     const players = order.map((slotKey,i)=>{
       const skin = pieceSkins[i] || PALETTE[i];
@@ -4130,8 +5560,6 @@
       if(hunterPoolOn){
         walls = (i===fugitiveIdx) ? Math.max(1, Math.floor(wallsEach/2)) : hunterPool;
       }
-      const mirrorBonusHere = (mirrorBalance && i===(1-mirrorOpenerIdx)) ? MIRROR_CFG.secondBonus : 0;
-      walls += mirrorBonusHere;
       return {
         id: i,
         name: isCPU ? (options.campaignRival || (isTeams ? (i===2 ? 'IA aliada' : 'IA rival ' + (i===1 ? 1 : 2)) : 'CPU')) : ((names[i] && names[i].trim()) ? names[i].trim() : PALETTE[i].name),
@@ -4146,7 +5574,7 @@
         stunned: false,
         powers: [],                                   // Fiesta: poderes guardados
         fx: { shield:0, extra:0, immune:0 },          // Fiesta: efectos activos (rondas de escudo · acción extra · turnos sin poder ser aturdido)
-        wallBonus: mirrorBonusHere,                    // Fiesta: paredes extra ya recibidas · Espejo: compensación por abrir segundo
+        wallBonus: 0,                                 // Fiesta: paredes extra ya recibidas
         hillTurns: 0,
         pushesLeft: ruleset==='hill' ? HILL_PUSHES : 0,
         sprints: (ruleset==='hunter' && i===fugitiveIdx) ? HUNTER_SPRINTS : 0,
@@ -4171,9 +5599,13 @@
       center: objective,
       objective,
       players,
-      currentPlayerIndex: startTeam==='B' ? 1 : (mirrorBalance ? mirrorOpenerIdx : 0),
+      currentPlayerIndex: firstIdx,
+      firstIdx, goalMode, goalSides,
+      pie: pieEnabled ? { open:false, resolved:false, actions:0, swapped:false } : null,
+      seatMeasured: plainRace && (ruleset==='classic' || ruleset==='official'),
+      startSeat: players.map((_,i)=> i),
+      hintsUsed: 0,
       teams, teamGoal, startTeam,
-      mirrorOpenerIdx: ruleset==='mirror' ? mirrorOpenerIdx : null,
       occupied: Array.from({length:size-1}, ()=>Array(size-1).fill(null)),
       blockedEdges: new Set(),
       walls: [],
@@ -4188,6 +5620,10 @@
       party: ruleset==='party' ? { round:1, nextSpawn:1, spawnMisses:0, usedThisTurn:false, pending:[], recent:[], stats:{ used:{}, picked:{}, spawned:0, vanished:0 } } : null,
       isDaily,
       dailyPar: null,
+      dailyInfo: (isDaily && options.dailyChallenge) ? { dateKey:options.dailyChallenge.dateKey, number:options.dailyChallenge.number, id:options.dailyChallenge.id,
+        label:options.dailyChallenge.label, emoji:options.dailyChallenge.emoji, hint:options.dailyChallenge.hint, slack:options.dailyChallenge.slack,
+        turnSeconds:options.dailyChallenge.turnSeconds||0 } : null,
+      dailyTimeouts: 0,
       hunterRoundLimit: ruleset==='hunter' ? size + HUNTER_ROUNDS_EXTRA : null,
       fugitiveIdx,
       hunterPool: hunterPoolOn ? hunterPool : null,
@@ -4209,8 +5645,21 @@
       timeoutStreak: 0,                                      // vencimientos seguidos sin que nadie jugara
       flagLoser: null,                                       // reloj de ajedrez: quién se quedó sin tiempo
       playerConfigs: customPlayers ? customPlayers.map(p=> Object.assign({}, p)) : null,
+      seed: gameSeed,                                        // 71: semilla de la partida (reproducir y compartir)
+      startedAt: Date.now(),
+      log: [],                                               // 69: registro de jugadas
+      undoEnabled: undoEnabledFor(ruleset, isDaily, !!options.campaign, players.filter(pl=> !pl.isCPU).length),
+      undoLeft: undoEnabledFor(ruleset, isDaily, !!options.campaign, players.filter(pl=> !pl.isCPU).length) ? UNDO_PER_GAME : 0,
+      capWarned: false,
     };
     mode = 'move';
+    state.botSeed = (options.botSeed!=null) ? (options.botSeed>>>0) : ((rng()*4294967296)>>>0);
+    setBotSeed(state.botSeed);
+    state.adaptiveOn = !HEADLESS && adaptiveEnabled() && state.isCpuGame && !state.campaign && !isDaily && playersCount===2;
+    state.hintsUsed = 0; state.pathUses = 0; state.keyMoments = [];
+    if(boardNoteEl) boardNoteEl.textContent = goalMode==='rows'
+      ? 'Cada jugador debe llegar al borde opuesto al suyo: la franja de su color marca la meta.'
+      : 'El objetivo es la casilla central marcada con el anillo dorado.';
 
     if(Array.isArray(options.presetWalls) && options.presetWalls.length){
       options.presetWalls.forEach(w=> tryPlaceEnvWall(state, w.r, w.c, w.orientation));
@@ -4227,25 +5676,26 @@
     if(isDaily){
       state.dailyPar = bfsShortestPath(players[0].r, players[0].c, mid, mid, state.blockedEdges, size);
     } else {
-      recordModePlayed(ruleset);
+      if(!HEADLESS) recordModePlayed(ruleset);
     }
     if(ruleset==='party') partySpawn();
 
     state.validMoves = computeValidMoves(state.currentPlayerIndex);
     render();
+    if(lotteryApplied){
+      showToast(`🎲 Sorteo: empieza ${escapeHtml(players[firstIdx].name)}.`);
+    }
     if(isTeams){
       const extraTeam = startTeam==='A' ? 'B' : 'A';
       const extra = teams[extraTeam].extra;
       showToast(`🎲 Sorteo: abre el Equipo ${startTeam}.` + (extra>0 ? ` El Equipo ${extraTeam} recibe +${extra} pared${extra===1?'':'es'} de compensación.` : ''));
-    } else if(mirrorBalance){
-      runMirrorCoinToss(mirrorOpenerIdx, MIRROR_CFG.secondBonus);
     }
   }
 
   // ---------- input handling (Pointer Events: works identically for mouse, touch and stylus) ----------
   let previewSlot = null;
   let dragging = false;
-  let wallReasonHintOn = false;   // hay un aviso puntual en pantalla (zona sitiada en Colina, reflejo inválido en Espejo)
+  let siegeHintOn = false;   // el aviso de "zona con menos de 2 accesos" está en pantalla
 
   boardSvg.addEventListener('contextmenu', e=> e.preventDefault());
 
@@ -4274,12 +5724,15 @@
   function finishWallDrag(){
     if(!dragging) return;
     dragging = false;
-    if(mode==='wall' && previewSlot && previewSlot.valid){
-      commitWall(previewSlot.r, previewSlot.c, previewSlot.orientation);
+    let rejected = false;
+    if(mode==='wall' && previewSlot){
+      if(previewSlot.valid) commitWall(previewSlot.r, previewSlot.c, previewSlot.orientation);
+      else rejected = true;
     }
     hideWallPreview();
     previewSlot = null;
-    if(wallReasonHintOn){ wallReasonHintOn = false; if(state && !state.winner) updateModeUI(); }
+    if(rejected){ vibrate(ERROR_VIBRATION); siegeHintOn = false; }   // soltar sobre una ranura inválida: vibra y deja el motivo a la vista
+    else if(siegeHintOn){ siegeHintOn = false; if(state && !state.winner) updateModeUI(); }
   }
   boardSvg.addEventListener('pointerup', finishWallDrag);
   boardSvg.addEventListener('pointercancel', finishWallDrag);
@@ -4288,68 +5741,39 @@
   function updateWallPreview(pt){
     const cs = cellSize();
     const slot = getWallSlotFromPoint(pt.x, pt.y);
-    const evalRes = evaluateWallForPreview(slot.r, slot.c, slot.orientation);
+    let evalRes = evaluateWallForPreview(slot.r, slot.c, slot.orientation);
+    const cpPrev = state.players[state.currentPlayerIndex];
+    if(evalRes.valid && cpPrev && cpPrev.wallsLeft<=0) evalRes = { valid:false, reason:'noWalls' };
     slot.valid = evalRes.valid;
     previewSlot = slot;
-    if(evalRes.reason==='hillSiege'){
-      hintLine.textContent = `No se puede cerrar la zona: tiene que quedar con al menos ${HILL_MIN_ACCESSES} accesos.`;
-      wallReasonHintOn = true;
-    } else if(evalRes.reason==='mirrorClash'){
-      hintLine.textContent = 'El reflejo choca con otra pared.';
-      wallReasonHintOn = true;
-    } else if(evalRes.reason==='mirrorBlocks'){
-      hintLine.textContent = `El reflejo le corta el camino a ${escapeHtml(evalRes.blockedPlayer.name)}.`;
-      wallReasonHintOn = true;
-    } else if(wallReasonHintOn){ wallReasonHintOn = false; updateModeUI(); }
+    const whyNot = evalRes.valid ? null : wallReasonText(evalRes.reason);
+    if(whyNot){
+      hintLine.textContent = whyNot;     // el motivo se ve mientras se arrastra (67)
+      siegeHintOn = true;
+    } else if(siegeHintOn){ siegeHintOn = false; updateModeUI(); }
     const rect = wallRect(slot.r, slot.c, slot.orientation, cs);
     const cp = state.players[state.currentPlayerIndex];
-    // Espejo (25): trama roja tanto en la pared original como en el/los reflejo(s) cuando la reflexión
-    // específicamente es lo que falla (choca o bloquea); un rechazo "de siempre" (p. ej. ranura ocupada) se
-    // ve igual que en cualquier otro modo, sin reflejo dibujado.
-    const badReflection = state.ruleset==='mirror' && !evalRes.valid && (evalRes.reason==='mirrorClash' || evalRes.reason==='mirrorBlocks');
     previewEl.setAttribute('x', rect.x);
     previewEl.setAttribute('y', rect.y);
     previewEl.setAttribute('width', rect.w);
     previewEl.setAttribute('height', rect.h);
     previewEl.setAttribute('rx', rect.h>rect.w ? rect.w*0.4 : rect.h*0.4);
-    previewEl.setAttribute('fill', badReflection ? 'url(#invalidHatch)' : (evalRes.valid ? cp.color : '#c0392b'));
-    previewEl.setAttribute('opacity', badReflection ? '0.6' : (evalRes.valid ? '0.55' : '0.4'));
-    if(state.ruleset==='mirror'){
-      updateMirrorPreview(slot, evalRes, rect, cs, cp, badReflection);
-    } else {
-      hideMirrorPreview();
+    previewEl.setAttribute('fill', evalRes.valid ? cp.color : '#c0392b');
+    previewEl.setAttribute('opacity', evalRes.valid ? '0.55' : '0.4');
+    // 65: con la ayuda activa, las fichas muestran cuánto cambia cada distancia si se pone esta pared
+    if(distHelpOn){
+      if(evalRes.valid){
+        const test = new Set(state.blockedEdges);
+        evalRes.edges.forEach(e=> test.add(edgeKey(e[0],e[1],e[2],e[3])));
+        if(evalRes.mirrorEdges) evalRes.mirrorEdges.forEach(e=> test.add(edgeKey(e[0],e[1],e[2],e[3])));
+        updateDistChips(test);
+      } else updateDistChips();
     }
-  }
-
-  // Espejo (25): dibuja, mientras se arrastra, la(s) copia(s) reflejada(s) al 50% de opacidad con el mismo
-  // color, unidas al original con una línea punteada; si el reflejo es inválido, ambas se pintan con trama roja.
-  function updateMirrorPreview(slot, evalRes, mainRect, cs, cp, badReflection){
-    const copies = (evalRes.valid && evalRes.mirrorCopies) ? evalRes.mirrorCopies
-      : (badReflection ? mirrorNeededCopies(slot.r, slot.c, slot.orientation) : []);
-    const mainCx = mainRect.x + mainRect.w/2, mainCy = mainRect.y + mainRect.h/2;
-    for(let k=0;k<3;k++){
-      const { rect: rEl, line: lEl } = mirrorPreviewEls[k];
-      const m = copies[k];
-      if(!m){ rEl.setAttribute('opacity','0'); lEl.setAttribute('opacity','0'); continue; }
-      const r = wallRect(m.r, m.c, m.orientation, cs);
-      rEl.setAttribute('x', r.x); rEl.setAttribute('y', r.y);
-      rEl.setAttribute('width', r.w); rEl.setAttribute('height', r.h);
-      rEl.setAttribute('rx', r.h>r.w ? r.w*0.4 : r.h*0.4);
-      rEl.setAttribute('fill', badReflection ? 'url(#invalidHatch)' : cp.color);
-      rEl.setAttribute('opacity', badReflection ? '0.6' : '0.5');
-      lEl.setAttribute('x1', mainCx); lEl.setAttribute('y1', mainCy);
-      lEl.setAttribute('x2', r.x+r.w/2); lEl.setAttribute('y2', r.y+r.h/2);
-      lEl.setAttribute('stroke', badReflection ? '#c0392b' : cp.color);
-      lEl.setAttribute('opacity', '0.55');
-    }
-  }
-  function hideMirrorPreview(){
-    mirrorPreviewEls.forEach(({rect,line})=>{ rect.setAttribute('opacity','0'); line.setAttribute('opacity','0'); });
   }
 
   function hideWallPreview(){
+    if(distHelpOn && state) updateDistChips();
     previewEl.setAttribute('opacity','0');
-    hideMirrorPreview();
   }
 
   // ---------- menú: modo / dificultad / nombres / modo de partida ----------
@@ -4369,9 +5793,7 @@
     if(rs && rs.forcePlayers) return rs.forcePlayers;
     if(currentMode()==='cpu') return 2;
     const r = document.querySelector('input[name="players"]:checked');
-    let n = r ? +r.value : 2;
-    if(rs && rs.allowedPlayers && rs.allowedPlayers.indexOf(n)<0) n = rs.allowedPlayers[0];
-    return n;
+    return r ? +r.value : 2;
   }
   function skinDotHTML(i){
     const sk = pieceSkins[i] || pieceSkins[0];
@@ -4379,7 +5801,7 @@
   }
   function updateDifficultyHint(){
     const r = document.querySelector('input[name="difficulty"]:checked');
-    difficultyHint.textContent = r && DIFFICULTY[r.value] ? DIFFICULTY[r.value].hint : '';
+    difficultyHint.textContent = adaptiveEnabled() ? `Dificultad adaptativa activa (nivel ${adaptiveLevelPct()} de 100): la IA se ajusta sola. Podés desactivarla en Ajustes.` : (r && DIFFICULTY[r.value] ? DIFFICULTY[r.value].hint : '');
   }
   namesContainer.addEventListener('click', e=>{
     const dot = e.target.closest('.skin-dot');
@@ -4445,20 +5867,8 @@
       playersFieldset.classList.add('hidden');
       const el = document.getElementById('p'+rs.forcePlayers);
       if(el) el.checked = true;
-      [2,3,4].forEach(n=>{ const inp=document.getElementById('p'+n), lab=document.querySelector('label[for="p'+n+'"]'); if(inp) inp.classList.remove('hidden'); if(lab) lab.classList.remove('hidden'); });
     } else {
       playersFieldset.classList.toggle('hidden', m==='cpu');
-      const allowed = rs && rs.allowedPlayers;
-      [2,3,4].forEach(n=>{
-        const inp = document.getElementById('p'+n), lab = document.querySelector('label[for="p'+n+'"]');
-        const ok = !allowed || allowed.indexOf(n)>=0;
-        if(inp) inp.classList.toggle('hidden', !ok);
-        if(lab) lab.classList.toggle('hidden', !ok);
-      });
-      if(allowed && allowed.indexOf(currentPlayersCount())<0){
-        const fb = document.getElementById('p'+allowed[0]);
-        if(fb) fb.checked = true;
-      }
     }
     renderNameInputs(currentPlayersCount(), teamAlly ? [1,2,3] : m==='cpu');
     refreshCustomLevelSelect();
@@ -4496,9 +5906,22 @@
     setMusicSliderFill();
     vibrateToggle.checked = vibrateOn;
     showMovesToggle.checked = showMovesOn;
+    distHelpToggle.checked = distHelpOn;
+    lotteryToggle.checked = lotteryOn;
+    pieToggle.checked = pieOn;
     glassToggle.checked = glassOn;
+    explainToggle.checked = explainOn;
+    adaptiveToggle.checked = adaptiveEnabled();
+    refreshAdaptiveHint();
     openOverlay('settings');
   }
+  function refreshAdaptiveHint(){
+    adaptiveHint.textContent = adaptiveEnabled()
+      ? `Nivel actual: ${adaptiveLevelPct()} de 100. Sube si ganás 4 de las últimas 5 partidas contra la IA y baja si ganás 1 o ninguna.`
+      : 'La IA ajusta sola su nivel según tus últimas 5 partidas. Reemplaza la dificultad elegida (no vale en campaña).';
+  }
+  explainToggle.addEventListener('change', ()=>{ explainOn = explainToggle.checked; writePref('quoridor_explain', explainOn ? '1' : '0'); });
+  adaptiveToggle.addEventListener('change', ()=>{ writePref('quoridor_adaptive', adaptiveToggle.checked ? '1' : '0'); refreshAdaptiveHint(); updateDifficultyHint(); });
   settingsThemeGroup.addEventListener('change', e=>{ applyTheme(e.target.value); });
   sfxVolumeInput.addEventListener('input', ()=>{ setSfxVolume(+sfxVolumeInput.value/100); setSliderFill(); });
   sfxVolumeInput.addEventListener('change', ()=>{ playMoveSound(); });        // muestra el volumen elegido
@@ -4512,6 +5935,19 @@
     showMovesOn = showMovesToggle.checked;
     writePref('quoridor_showMoves', showMovesOn ? '1' : '0');
     applyShowMoves();
+  });
+  distHelpToggle.addEventListener('change', ()=>{
+    distHelpOn = distHelpToggle.checked;
+    writePref('quoridor_distHelp', distHelpOn ? '1' : '0');
+    updateDistChips();
+  });
+  lotteryToggle.addEventListener('change', ()=>{
+    lotteryOn = lotteryToggle.checked;
+    writePref('quoridor_lottery', lotteryOn ? '1' : '0');
+  });
+  pieToggle.addEventListener('change', ()=>{
+    pieOn = pieToggle.checked;
+    writePref('quoridor_pie', pieOn ? '1' : '0');
   });
   glassToggle.addEventListener('change', ()=>{
     glassOn = glassToggle.checked;
@@ -4599,20 +6035,20 @@
 
   function scoreBotMove(botIdx,m,personality,edgesOverride){
     const edges = edgesOverride || state.blockedEdges;
-    const bot=state.players[botIdx], myAfter=distanceToCenter(m.r,m.c,edges);
+    const bot=state.players[botIdx], myAfter=distanceToCenter(m.r,m.c,edges,botIdx);
     let score=-myAfter*10, oppIdx=otherPlayerClosestToCenter(botIdx, edges);
     if(m.swap){
       // intercambio con el aliado: vale la pena sólo si lo que gano yo supera lo que pierde él (queda en mi casilla actual)
       const al = state.players[allyIdxOf(botIdx)];
       score -= (distanceToCenter(bot.r,bot.c,edges) - distanceToCenter(al.r,al.c,edges))*10 + 2;
     }
-    if(oppIdx!=null){ const oppDist=distanceToCenter(state.players[oppIdx].r,state.players[oppIdx].c,edges);
+    if(oppIdx!=null){ const oppDist=distanceToCenter(state.players[oppIdx].r,state.players[oppIdx].c,edges,oppIdx);
       if(personality==='aggressive')score+=(oppDist-myAfter)*1.8;
       if(personality==='defensive')score+=oppDist*0.25;
       if(personality==='speed'&&myAfter===0)score+=1000;
       if(personality==='strategist')score+=(oppDist-myAfter)*0.9;
     }
-    if(personality==='defensive')score+=distanceToCenter(bot.r,bot.c,edges)-myAfter;
+    if(personality==='defensive')score+=distanceToCenter(bot.r,bot.c,edges,botIdx)-myAfter;
     if(state.ruleset==='hill'){
       // término "hill": acercarse a la casilla libre más cercana de la zona, valorar estar dentro, no salir de ella
       // y sólo gastar un empujón si me deja adentro
@@ -4802,6 +6238,7 @@
   // frame/frameOn = globo del pack de emotes (normal / seleccionado), medal = medalla que aparece al ganar en ese modo.
   const MODE_CATALOG = [
     { key:'classic', icon:'circle',       frame:'f1', frameOn:'f2', medal:1, level:1 },
+    { key:'official',icon:'bars',         frame:'f1', frameOn:'f2', medal:1, level:1 },
     { key:'fog',     icon:'cloud',        frame:'f5', frameOn:'f6', medal:2, level:2 },
     { key:'teams',   icon:'hearts',       frame:'f3', frameOn:'f4', medal:3, level:2 },
     { key:'party',   icon:'music',        frame:'f7', frameOn:'f7', medal:4, level:2 },
@@ -4867,10 +6304,11 @@
         const on = el.dataset.mode===pending, ok = isAvailable(el.dataset.mode);
         el.setAttribute('aria-checked', on ? 'true' : 'false');
         el.setAttribute('aria-disabled', ok ? 'false' : 'true');
+        el.classList.toggle('is-locked', !isUnlocked('mode:' + el.dataset.mode));
         el.tabIndex = on ? 0 : -1;
       });
       const m = MODE_BY_KEY[pending], r = rs(pending);
-      const players = r.forcePlayers ? r.forcePlayers+' jugadores' : (r.allowedPlayers ? r.allowedPlayers.join(' o ')+' jugadores' : '2 a 4 jugadores');
+      const players = r.forcePlayers ? r.forcePlayers+' jugadores' : '2 a 4 jugadores';
       const who = r.forceLocal ? (pending==='teams' ? 'Local o Yo + IA' : 'Solo local') : 'Local o vs. IA';
       modeDetail.innerHTML = '<div class="md-inner">'
         + '<div class="md-head"><span class="md-name">'+escapeHtml(r.label)+'</span><span class="stars-row" title="Complejidad">'+starsHTML(m.level,3,13)+'</span></div>'
@@ -4993,8 +6431,12 @@
       if(closeTimer) return;
       const key = pending;
       if(isAvailable(key) && key!==currentRuleset()){
-        rulesetSelect.value = key;
-        rulesetSelect.dispatchEvent(new Event('change', { bubbles:true }));   // reutiliza toda la lógica existente del menú
+        const apply = ()=>{
+          rulesetSelect.value = key;
+          rulesetSelect.dispatchEvent(new Event('change', { bubbles:true }));   // reutiliza toda la lógica existente del menú
+        };
+        if(!isUnlocked('mode:' + key)){ offerUnlock('mode:' + key, ()=>{ apply(); paint(); close(); }); return; }
+        apply();
       }
       close();
     }
@@ -5015,40 +6457,131 @@
   helpLinkBtn.addEventListener('click', ()=> openOverlay('tutorial'));
 
   // ---------- desafío diario ----------
-  function generateDailyLayout(dateStr, size){
-    // la semilla del día sale del texto de la fecha: el mismo tablero para todos, ahora con patrones
-    const seed = Math.floor(hashStringToSeed('quoridor-daily-'+dateStr+'-'+size)() * SEED_SPACE);
-    return generateMaze({ size, players:1, density:'medio', seed }).walls;
+  function generateDailyLayout(dateStr, size, density){
+    // la semilla del día sale del texto de la fecha (UTC): el mismo tablero para todos, ahora con patrones
+    const dens = density || 'medio';
+    const seed = Math.floor(hashStringToSeed('quoridor-daily-'+dateStr+'-'+size+(dens==='medio' ? '' : '-'+dens))() * SEED_SPACE);
+    return generateMaze({ size, players:1, density:dens, seed }).walls;
   }
   function initDailyChallenge(){
-    const dateStr = todayKey();
-    const walls = generateDailyLayout(dateStr, 9);
-    initGame(1, 9, { isDaily:true, dailyWalls: walls });
+    const ch = dailyChallengeFor(utcDayKey());
+    initGame(1, ch.size, { isDaily:true, dailyWalls: ch.walls, dailyChallenge: ch, ruleset: ch.ruleset, turnTimeSeconds: ch.turnSeconds||0 });
     closeOverlay('daily');
     menuScreen.classList.add('hidden');
     editorScreen.classList.add('hidden');
     gameScreen.classList.remove('hidden');
   }
-  function dailyParToday(){
-    const size = 9, mid = 4;
-    const walls = generateDailyLayout(todayKey(), size);
-    const blocked = new Set();
-    walls.forEach(w=> wallEdges(w.r,w.c,w.orientation).forEach(e=> blocked.add(edgeKey(e[0],e[1],e[2],e[3]))));
-    return bfsShortestPath(0, mid, mid, mid, blocked, size);
-  }
-  function renderDailyOverlay(){
-    const today = todayKey();
+
+  // --- compartir resultado (90) ---
+  function dailyRecordFor(key){
     const d = statsData.daily;
-    const doneToday = d.lastDate === today;
-    const bestToday = d.bestMoves ? d.bestMoves[today] : null;
-    const par = dailyParToday();
-    let html;
-    if(doneToday && bestToday!=null){
-      html = `<div class="big">✅</div><div class="daily-stars">${starsHTML(dailyStars(bestToday,par),3,34)}</div><div class="sub">Ya lo resolviste hoy en ${bestToday} movimiento${bestToday===1?'':'s'} (par: ${par}).</div>`;
-    } else {
-      html = `<div class="big">🗓️</div><div class="sub">Todavía no lo resolviste hoy. El tablero de hoy es el mismo para todos. Par: ${par} movimientos.</div>`;
+    if(d.history[key]) return d.history[key];
+    if(d.bestMoves[key]!=null) return { moves:d.bestMoves[key], par:null, stars:0, mode:null, size:null, timeouts:0 };   // días anteriores a la rotación
+    return null;
+  }
+  function buildDailyShareText(key){
+    const h = dailyRecordFor(key);
+    if(!h) return '';
+    const cfg = DAILY_ROTATION.find(x=> x.id===h.mode) || null;
+    const lines = [`Quoridor · Desafío diario #${dailyNumberOf(key)}${cfg ? ' '+cfg.emoji : ''}`];
+    lines.push((cfg ? `${cfg.label} · ${h.size||cfg.size}×${h.size||cfg.size} · ` : '') + `${key} (UTC)`);
+    const stars = h.stars || (cfg && h.par!=null ? dailyStars(h.moves, h.par, cfg.slack) : 0);
+    const diff = h.par!=null ? h.moves - h.par : null;
+    lines.push((stars ? '⭐'.repeat(stars)+'☆'.repeat(3-stars)+' ' : '') + `${h.moves} movimiento${h.moves===1?'':'s'}`
+      + (h.par!=null ? ` (par ${h.par}${diff>0 ? ', +'+diff : ''})` : ''));
+    if(h.timeouts>0) lines.push(`⏱️ Tiempos agotados: ${h.timeouts}`);
+    const st = dailyStreakStatus(statsData.daily, utcDayKey());
+    if(key===utcDayKey() && st.alive && st.streak>0) lines.push(`🔥 Racha: ${st.streak} día${st.streak===1?'':'s'}`);
+    lines.push(key===utcDayKey() ? '¿Podés mejorarlo? El desafío de hoy es el mismo para todos.' : 'Ese día el desafío era el mismo para todos.');
+    return lines.join('\n');
+  }
+  function copyTextFallback(text){
+    try{
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.setAttribute('readonly',''); ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      const ok = document.execCommand && document.execCommand('copy');
+      document.body.removeChild(ta);
+      return !!ok;
+    }catch(e){ return false; }
+  }
+  async function shareDailyResult(key){
+    key = key || utcDayKey();
+    const text = buildDailyShareText(key);
+    if(!text){ showToast('Todavía no resolviste ese desafío.'); return; }
+    try{
+      if(navigator.share){ await navigator.share({ text }); return; }
+    }catch(e){
+      if(e && e.name==='AbortError') return;          // el jugador cerró el menú de compartir
     }
-    const curStreak = (d.lastDate===today || d.lastDate===todayKey(-1)) ? (d.streak||0) : 0;
+    let copied = false;
+    try{ if(navigator.clipboard && navigator.clipboard.writeText){ await navigator.clipboard.writeText(text); copied = true; } }catch(e){}
+    if(!copied) copied = copyTextFallback(text);
+    showToast(copied ? '📋 Resultado copiado. ¡Pegalo donde quieras!' : 'No se pudo compartir. Copiá el resultado a mano desde la captura.');
+  }
+  shareDailyBtn.addEventListener('click', ()=> shareDailyResult(dailyInfoOf(state).dateKey));
+  shareDailyOverlayBtn.addEventListener('click', ()=> shareDailyResult(utcDayKey()));
+
+  // --- calendario (91) ---
+  const MONTHS_ES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+  let dailyCalView = null;     // mes que se está mirando: { y, m } (UTC)
+  function dailyCalReset(){ const t = new Date(); dailyCalView = { y:t.getUTCFullYear(), m:t.getUTCMonth() }; }
+  function renderDailyCalendar(){
+    if(!dailyCalView) dailyCalReset();
+    const d = statsData.daily, todayK = utcDayKey();
+    const { y, m } = dailyCalView;
+    const lead = (new Date(Date.UTC(y, m, 1)).getUTCDay() + 6) % 7;              // la semana arranca el lunes
+    const total = new Date(Date.UTC(y, m+1, 0)).getUTCDate();
+    let cells = '', done = 0, shielded = 0, elapsed = 0;
+    for(let i=0;i<lead;i++) cells += '<span class="cal-day blank"></span>';
+    for(let day=1; day<=total; day++){
+      const key = y+'-'+String(m+1).padStart(2,'0')+'-'+String(day).padStart(2,'0');
+      const future = key > todayK, isDone = isDailyDone(d, key), isShield = !isDone && !!d.shielded[key];
+      const h = d.history[key], stars = h ? (h.stars||0) : 0;
+      if(!future) elapsed++;
+      if(isDone) done++;
+      if(isShield) shielded++;
+      const cfg = h && DAILY_ROTATION.find(x=> x.id===h.mode);
+      const label = `${day} de ${MONTHS_ES[m]}` + (isDone ? `: resuelto en ${h ? h.moves : d.bestMoves[key]} movimientos${cfg ? ' ('+cfg.label+')' : ''}` : (isShield ? ': día protegido por un escudo' : (future ? '' : ': sin resolver')));
+      const cls = 'cal-day' + (isDone ? ' done'+(stars ? ' s'+stars : '') : '') + (isShield ? ' shield' : '') + (key===todayK ? ' today' : '') + (future ? ' future' : '');
+      const mark = isDone ? (stars ? '★'.repeat(stars) : '✓') : (isShield ? '🛡️' : '');
+      cells += `<span class="${cls}" title="${label}" aria-label="${label}"><b>${day}</b><i>${mark}</i></span>`;
+    }
+    dailyCalTitle.textContent = MONTHS_ES[m] + ' ' + y;
+    dailyCalGrid.innerHTML = cells;
+    const first = new Date(DAILY_EPOCH_UTC), minIdx = first.getUTCFullYear()*12 + first.getUTCMonth();
+    const now = new Date(), maxIdx = now.getUTCFullYear()*12 + now.getUTCMonth();
+    dailyCalPrev.disabled = (y*12+m) <= minIdx;
+    dailyCalNext.disabled = (y*12+m) >= maxIdx;
+    dailyCalLegend.textContent = `${done} de ${elapsed} día${elapsed===1?'':'s'} resuelto${done===1?'':'s'} este mes` + (shielded ? ` · ${shielded} protegido${shielded===1?'':'s'} 🛡️` : '');
+  }
+  function dailyCalMove(delta){
+    if(!dailyCalView) dailyCalReset();
+    let idx = dailyCalView.y*12 + dailyCalView.m + delta;
+    dailyCalView = { y:Math.floor(idx/12), m:((idx%12)+12)%12 };
+    renderDailyCalendar();
+  }
+  dailyCalPrev.addEventListener('click', ()=> dailyCalMove(-1));
+  dailyCalNext.addEventListener('click', ()=> dailyCalMove(1));
+
+  function renderDailyOverlay(){
+    const today = utcDayKey();
+    const d = statsData.daily;
+    const ch = dailyChallengeFor(today);
+    const tomorrow = dailyModeFor(dayKeyAdd(today, 1));
+    const doneToday = isDailyDone(d, today);
+    const rec = dailyRecordFor(today);
+    const par = ch.par;
+    const st = dailyStreakStatus(d, today);
+    const resetLocal = new Date(dayKeyToMs(dayKeyAdd(today, 1))).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
+    let html = `<div class="daily-mode"><span class="dm-emoji">${ch.emoji}</span><div><b>Desafío #${ch.number} · ${ch.label}</b><small>${ch.size}×${ch.size} · par ${par}${ch.turnSeconds ? ' · '+ch.turnSeconds+' s por turno' : ''}</small></div></div>`;
+    if(doneToday && rec){
+      const stars = rec.stars || dailyStars(rec.moves, par, ch.slack);
+      html += `<div class="daily-stars">${starsHTML(stars,3,34)}</div><div class="sub">Ya lo resolviste hoy en ${rec.moves} movimiento${rec.moves===1?'':'s'} (par: ${par}).</div>`;
+    } else {
+      html += `<div class="sub">${ch.hint}</div><div class="sub">Todavía no lo resolviste hoy. Es el mismo desafío para todos los jugadores.</div>`;
+    }
+    const curStreak = st.alive ? st.streak : 0;
     const nextStreak = doneToday ? curStreak : curStreak + 1;
     const pos = ((Math.max(nextStreak,1) - 1) % 7) + 1;
     let dots = '';
@@ -5061,15 +6594,36 @@
     html += (wallet.dailyPaid===today)
       ? `<div class="sub">Ya cobraste la recompensa de hoy.</div>`
       : `<div class="sub">Recompensa de hoy: de ${base} a ${base+20} monedas según las estrellas (3 estrellas si igualás el par).</div>`;
-    html += `<div class="sub" style="margin-top:8px;">Racha actual: ${curStreak} día${curStreak===1?'':'s'} · Mejor racha: ${d.bestStreak||0}</div>`;
-    html += `<div class="sub">Cada 7 días seguidos te espera un cofre con un emote sorpresa.</div>`;
+    html += `<div class="sub" style="margin-top:8px;">🔥 Racha actual: ${curStreak} día${curStreak===1?'':'s'} · Mejor racha: ${d.bestStreak||0}</div>`;
+    html += `<div class="sub">🛡️ Escudos: ${d.shields||0}/${DAILY_SHIELD_MAX}. Ganás uno cada ${DAILY_SHIELD_EVERY} días seguidos y cubre un día sin jugar.</div>`;
+    if(!doneToday){
+      if(st.gap!=null && st.gap>=2 && st.covered) html += `<div class="sub daily-warn">🛡️ Faltaste ${st.missed} día${st.missed===1?'':'s'}: si resolvés el de hoy, tus escudos protegen la racha.</div>`;
+      else if(st.gap!=null && st.gap>=2 && (d.streak||0)>0) html += `<div class="sub daily-warn">Tu racha de ${d.streak} día${d.streak===1?'':'s'} se cortó: tus escudos no alcanzan para cubrir ${st.missed} días. ¡Empezá una nueva hoy!</div>`;
+      else if(st.gap===1 && curStreak>0) html += `<div class="sub daily-warn">¡No cortes la racha! Resolvé el desafío de hoy.</div>`;
+    }
+    html += `<div class="sub" style="margin-top:8px;">Mañana: ${tomorrow.emoji} ${tomorrow.label}. Cambia todos los días a las ${resetLocal} (00:00 UTC).</div>`;
     dailyStatusBody.innerHTML = html;
     playDailyBtn.textContent = doneToday ? 'Jugar de nuevo' : 'Jugar';
+    shareDailyOverlayBtn.classList.toggle('hidden', !doneToday);
+    renderDailyCalendar();
   }
-  dailyReadyChip.addEventListener('click', ()=>{ renderDailyOverlay(); openOverlay('daily'); });
-  dailyLinkBtn.addEventListener('click', ()=>{ renderDailyOverlay(); openOverlay('daily'); });
+  function openDailyOverlay(){ dailyCalReset(); renderDailyOverlay(); openOverlay('daily'); }
+  dailyReadyChip.addEventListener('click', openDailyOverlay);
+  dailyLinkBtn.addEventListener('click', openDailyOverlay);
   playDailyBtn.addEventListener('click', initDailyChallenge);
   closeDailyBtn.addEventListener('click', ()=> closeOverlay('daily'));
+
+  // El desafío cambia a las 00:00 UTC: si la app queda abierta, se refresca el aviso y el panel al cruzar la medianoche.
+  let lastUtcDay = utcDayKey();
+  function checkDayRollover(){
+    const k = utcDayKey();
+    if(k===lastUtcDay) return;
+    lastUtcDay = k;
+    updateBadges();
+    if(!dailyOverlay.classList.contains('hidden')){ dailyCalReset(); renderDailyOverlay(); }
+  }
+  setInterval(checkDayRollover, 60000);
+  document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) checkDayRollover(); });
 
   // ---------- recordatorio diario (notificaciones nativas, ver MainActivity.java) ----------
   function loadReminderPref(){
@@ -5412,6 +6966,12 @@
   function doRestart(sameMap){
     if(!state) return;
     if(state.isDaily){ hideWinOverlay(); closeOverlay('pause'); initDailyChallenge(); return; }
+    sanitizeSkinsForLocks();
+    if(!state.campaign && !isUnlocked('mode:' + state.ruleset)){
+      showToast('⏱️ Terminó el desbloqueo de «' + escapeHtml((RULESETS[state.ruleset]||{}).label || state.ruleset) + '».');
+      goToMenu();
+      return;
+    }
     const cfg = {
       isCpu: !!state.isCpuGame,
       difficulty: (state.players[1] && state.players[1].difficulty) || 'easy',
@@ -5437,6 +6997,13 @@
 
   startBtn.addEventListener('click', ()=>{
     const ruleset = currentRuleset();
+    sanitizeSkinsForLocks();
+    if(!isUnlocked('mode:' + ruleset)){             // el desbloqueo temporal terminó
+      showToast('⏱️ Terminó el desbloqueo de «' + escapeHtml(RULESETS[ruleset].label) + '». Elegí otro modo o desbloquealo de nuevo.');
+      rulesetSelect.value = 'classic';
+      rulesetSelect.dispatchEvent(new Event('change', { bubbles:true }));
+      return;
+    }
     const m = currentMode();
     const isCpu = m==='cpu';
     const teamAlly = ruleset==='teams' && currentTeamSetup()==='ally';
@@ -5517,6 +7084,20 @@
   applyShowMoves();
   preloadAssets();
   updateCoinUI(false);
+  applyBoardTheme();
+  pruneEntitlements();
+  if(billingAvailable() && typeof window.AndroidBilling.queryPurchases==='function'){   // 139 · verificar la compra al iniciar
+    billingSilentRestore = true;
+    try{ window.AndroidBilling.queryPurchases(); }catch(e){ billingSilentRestore = false; }
+  }
+  setTimeout(()=>{
+    if(walletTamperNotice || entTamperNotice) showToast('⚠️ Detectamos cambios en tus datos de la tienda y se restauró el último estado válido.');
+    if(welcomeClaimable() && !wallet.welcomeShown){
+      wallet.welcomeShown = true; saveWallet();
+      showToast('🎁 Tenés un paquete de bienvenida esperando en la tienda');
+    }
+    updateBadges();
+  }, 900);
 
   (function restoreLastSetup(){
     const cfg = loadLastSetup();
@@ -5535,7 +7116,7 @@
     if(cfg.size){
       const sr = document.getElementById('s'+cfg.size); if(sr) sr.checked = true;
     }
-    if(cfg.ruleset && RULESETS[cfg.ruleset]){
+    if(cfg.ruleset && RULESETS[cfg.ruleset] && isUnlocked('mode:' + cfg.ruleset)){
       rulesetSelect.value = cfg.ruleset;
     }
     if(cfg.mazeDensity && MAZE_DENSITIES[cfg.mazeDensity]){
@@ -5550,19 +7131,73 @@
   })();
 
   if(window.__QUORIDOR_TEST__){
+    window.__quoridorEconomy = { economyTable, sha256Hex, checkSeal, signed, stableStringify, buyItem, canBuy, isAvailableNow, offerWindow,
+      isUnlocked, grantUnlock, premiumActive, requestRewardedAd, doubleWinCoins, loadWallet, saveWallet, loadEnt,
+      itemById, getWallet:()=> wallet, getEnt:()=> entitlements, setWallet:w=>{ wallet = w; }, hasWindow, welcomeClaimable };
     window.__quoridorMaze = { generateMaze, generateRandomWalls, tryPlaceEnvWall, MAZE_PATTERNS, MAZE_RULES, MAZE_DENSITIES, MAZE_TEMPLATES,
       mazeContext, mazeTable, mazePool, mazeEval, mazeJudge, userPatternFrom, seedToText, seedFromText, generateDailyLayout, hashStringToSeed, SEED_SPACE,
       getState:()=> state, bfsShortestPath, openOverlay, closeOverlay };
+    window.__quoridorDaily = { utcDayKey, dayKeyDiff, dayKeyAdd, DAILY_ROTATION, dailyModeFor, dailyChallengeFor, dailyNumberOf, dailyStreakStatus, recordDailyResult,
+      buildDailyShareText, shareDailyResult, initDailyChallenge, dailyStars, isDailyDone, renderDailyOverlay, renderDailyCalendar, onClockExpired, DAILY_SHIELD_MAX,
+      getStats:()=> statsData, getState:()=> state, performMove, initGame, advanceTurn };
+    window.__quoridorV4 = { initGame, getState:()=> state, botAct, performMove, commitWall, advanceTurn, render, computeValidMoves,
+      WALLS_TABLE, wallsPerPlayer, legacyWallsPerPlayer, goalCells, isGoalCell, distanceToGoal, distanceToCenter, hasPath, playerHasPath,
+      pieSwap, botMaybePie, updateDistChips, statsData:()=> statsData,
+      setPrefs:(o)=>{ if('pie' in o) pieOn=!!o.pie; if('lottery' in o) lotteryOn=!!o.lottery; if('dist' in o) distHelpOn=!!o.dist; },
+      wallet:()=> wallet, K:{ HINT_COST } };
     window.__quoridorParty = { initGame, getState:()=> state, botAct, botPartyPowers, performMove, commitWall, advanceTurn, render,
       partyUse, partyCanUse, partyCanTake, partySpawn, partyStunTarget, partyBreakChoice, partyNewRound, partyPickSpawnCell,
+      serializeState, deserializeState, restoreState, undoLastAction, canUndo, grantExtraUndo, checkTurnCap, turnCapLimit,
+      edgeKey, evaluateWallPlacement, evaluateWallForMode, wallReasonText, exportGameLog, seedGame, rng, mulberry32, botPlanMove,
       computeValidMoves, distanceToCenter, hasPath, PARTY_POWERS, PARTY_TYPES, EMOTE_ICON_IDS, RULESETS,
-      mirrorSlot, mirrorSlots, mirrorNeededCopies, evaluateWallForMode, wallRect, getWallSlotFromPoint, canPlaceWallSlot,
-      wallEdges, mirrorWallCost, MIRROR_CFG,
       K:{ PARTY_MAX_HELD, PARTY_TOKEN_TTL, PARTY_RESPAWN_MIN, PARTY_SPAWN_MAX_DIST, PARTY_WALL_BONUS_MAX, PARTY_SHIELD_ROUNDS, PARTY_STUN_IMMUNE_TURNS, PARTY_STUN_MAX_LEAD } };
   }
   modePicker.build();
   updateMenuVisibility();
   updateBadges();
+
+  // ---------- Torneo de regresión (81) y pruebas del motor ----------
+  // Juega IA contra IA sin dibujar, sin sonido y sin tocar estadísticas ni monedas. Uno de los dos empieza en cada
+  // partida (se alterna) y la semilla de la IA es reproducible, así que un resultado raro se puede repetir.
+  function aiPlayGame(diffs,size,seed,maxTurns){
+    HEADLESS = true;
+    try{
+      const mid=(size-1)/2, W=wallsPerPlayer(size,2);
+      initGame(2,size,{ ruleset:'classic', names:['A','B'], botSeed:seed, playerConfigs:[
+        { isCPU:true, difficulty:diffs[0], r:0, c:mid, walls:W },
+        { isCPU:true, difficulty:diffs[1], r:size-1, c:mid, walls:W } ] });
+      let guard=0, worstMs=0;
+      while(!state.winner && guard++<(maxTurns||500)){
+        const t0=performance.now();
+        botAct(state.currentPlayerIndex);
+        worstMs = Math.max(worstMs, performance.now()-t0);
+      }
+      return { winner: state.winner ? state.winner.id : -1, moves: state.moveCount||0, worstMs };
+    } finally { HEADLESS = false; }
+  }
+  function aiTournament(opts){
+    opts = opts || {};
+    const pairs = opts.pairs || [['expert','hard'],['hard','normal']];
+    const sizes = opts.sizes || [7,9,11];
+    const games = opts.games || 200;
+    const seedBase = opts.seedBase || 1;
+    const out = [];
+    pairs.forEach(pair=> sizes.forEach(size=>{
+      let wins=0, played=0, draws=0, worst=0, moves=0;
+      for(let g=0; g<games; g++){
+        const strongFirst = g%2===0;
+        const res = aiPlayGame(strongFirst ? [pair[0],pair[1]] : [pair[1],pair[0]], size, seedBase*100003 + g*17 + size);
+        if(res.winner<0){ draws++; continue; }
+        played++; moves += res.moves; worst = Math.max(worst,res.worstMs);
+        if(res.winner === (strongFirst?0:1)) wins++;
+      }
+      out.push({ strong:pair[0], weak:pair[1], size, games, wins, draws, rate: played ? wins/played : 0, avgMoves: played ? moves/played : 0, worstMs:worst });
+    }));
+    return out;
+  }
+  window.QuoridorAI = { _tune:(o)=>{ if(o.aw!=null) MM_AW=o.aw; if(o.mm!=null) MM_ON=o.mm; if(o.ww!=null) MM_WW=o.ww; if(o.walls!=null) MM_WALLS=o.walls; if(o.moves!=null) MM_MOVES=o.moves; if(o.total!=null) MM_TOTAL=o.total; if(o.rw!=null) MM_REPLY_WALLS=o.rw; }, playGame:aiPlayGame, tournament:aiTournament, makeRng,
+    _engine:{ botAct, hasPath, bfsShortestPath, distanceToCenter, edgeKey, wallEdges, getState:()=>state, BFS_STATS, collectWallCandidates, minimaxDecision,
+      evaluateWallForMode, commitWall, performMove, botPlanMove, setBotSeed, initGame, render, openSettings, updateAssistBtns, keyMomentText, adaptiveRandomness, updateAdaptiveAfterGame, getStats:()=>statsData, recordGameResult } };
 
   let tutorialSeen = false;
   try{ tutorialSeen = localStorage.getItem('quoridor_tutorial_seen')==='1'; }catch(e){}

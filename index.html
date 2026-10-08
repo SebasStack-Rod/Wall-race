@@ -172,13 +172,22 @@
     <button type="button" class="kbtn small mode-btn active" id="moveModeBtn" data-mode="move">🚶 Mover</button>
     <button type="button" class="kbtn small mode-btn" id="wallModeBtn" data-mode="wall">🧱 Colocar pared</button>
     <button type="button" class="kbtn small mode-btn hidden" id="sprintBtn" aria-label="Sprint: paso doble en línea recta"><img class="btn-ico" src="assets/emotes/icons/exclamations.png" alt=""> Sprint <span id="sprintCount">2</span></button>
+    <button type="button" class="kbtn small mode-btn hidden" id="undoBtn" aria-label="Deshacer la última jugada (una vez por partida)" title="Deshacer la última jugada (una vez por partida)">↩ Deshacer</button>
+  </div>
+  <div class="mode-toggle assist-row hidden" id="assistRow">
+    <button type="button" class="kbtn small mode-btn" id="hintBtn">💡 Pista</button>
+    <button type="button" class="kbtn small mode-btn" id="pathBtn" aria-label="Mantené presionado para ver el camino más corto del rival">👁️ Camino rival</button>
   </div>
   <div class="power-bar hidden" id="powerBar">
     <div class="power-btns" id="powerBtns"></div>
     <div class="power-note" id="powerNote" aria-live="polite"></div>
     <details class="power-help"><summary>¿Qué hace cada poder?</summary><ul id="powerHelpList"></ul></details>
   </div>
+  <div class="mode-toggle aux-toggle hidden" id="auxToggle">
+    <button type="button" class="kbtn small mode-btn hidden" id="pieBtn" aria-label="Regla del pastel: cambiar de lado con tu rival">🥧 Cambiar de lado</button>
+  </div>
   <p class="hint-line" id="hintLine">Tocá una casilla resaltada para moverte.</p>
+  <div class="dist-chips hidden" id="distChips" role="status" aria-live="polite"></div>
 
   <div class="game-layout">
     <div class="board-wrap">
@@ -205,30 +214,17 @@
             <rect x="0" y="0" width="630" height="630" fill="white"/>
             <circle id="fogMaskHole" cx="315" cy="315" r="140" fill="url(#fogGrad)"/>
           </mask>
-          <!-- Espejo: trama para el aviso "el reflejo choca / bloquea" en la vista previa -->
-          <pattern id="invalidHatch" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-            <rect width="7" height="7" fill="#c0392b" opacity="0.4"/>
-            <line x1="0" y1="0" x2="0" y2="7" stroke="#7a231a" stroke-width="2.2"/>
-          </pattern>
         </defs>
         <g id="gridGroup"></g>
         <g id="movesGroup"></g>
         <g id="wallsGroup"></g>
         <g id="piecesGroup"></g>
+        <g id="hintGroup" pointer-events="none"></g>
         <rect id="fogOverlay" x="0" y="0" width="630" height="630" fill="rgba(10,12,22,0.7)" mask="url(#fogMask)" opacity="0" pointer-events="none"></rect>
         <g id="emotesGroup" pointer-events="none"></g>
-        <!-- Espejo: líneas punteadas de la copia original a cada reflejo (hasta 3 con 4 jugadores) -->
-        <g id="mirrorPreviewGroup" pointer-events="none">
-          <line id="wallMirrorLine0" x1="0" y1="0" x2="0" y2="0" stroke="transparent" stroke-width="2" stroke-dasharray="5 4" opacity="0"></line>
-          <line id="wallMirrorLine1" x1="0" y1="0" x2="0" y2="0" stroke="transparent" stroke-width="2" stroke-dasharray="5 4" opacity="0"></line>
-          <line id="wallMirrorLine2" x1="0" y1="0" x2="0" y2="0" stroke="transparent" stroke-width="2" stroke-dasharray="5 4" opacity="0"></line>
-          <rect id="wallMirrorPreview0" x="0" y="0" width="0" height="0" fill="transparent" opacity="0" pointer-events="none"></rect>
-          <rect id="wallMirrorPreview1" x="0" y="0" width="0" height="0" fill="transparent" opacity="0" pointer-events="none"></rect>
-          <rect id="wallMirrorPreview2" x="0" y="0" width="0" height="0" fill="transparent" opacity="0" pointer-events="none"></rect>
-        </g>
         <rect id="wallPreview" x="0" y="0" width="0" height="0" fill="transparent" opacity="0" pointer-events="none"></rect>
       </svg>
-      <p class="board-note">El objetivo es la casilla central marcada con el anillo dorado.</p>
+      <p class="board-note" id="boardNote">El objetivo es la casilla central marcada con el anillo dorado.</p>
     </div>
 
     <aside class="side-panel">
@@ -248,12 +244,15 @@
     <h2 id="winTitle"></h2>
     <p id="winMsg"></p>
     <p class="win-map hidden" id="winMapInfo"></p>
+    <p class="win-map hidden" id="winKeyMoment"></p>
     <div class="win-stars hidden" id="winStars"></div>
     <div class="win-rewards" id="winRewards"></div>
+    <button type="button" class="kbtn green block win-double hidden" id="winDoubleBtn"></button>
     <div class="win-goal hidden" id="winGoal"></div>
     <div class="modal-actions">
       <button class="kbtn yellow big block" id="playAgainBtn">Jugar de nuevo</button>
       <button class="kbtn green block hidden" id="repeatMapBtn">Repetir mapa</button>
+      <button class="kbtn green block hidden" id="shareDailyBtn">Compartir resultado</button>
       <button class="kbtn grey block" id="changeConfigBtn">Cambiar configuración</button>
     </div>
   </div>
@@ -278,19 +277,6 @@
     <p id="handoffMsg">El siguiente jugador toma el control.</p>
     <div class="modal-actions">
       <button class="kbtn yellow big block" id="handoffReadyBtn">Listo</button>
-    </div>
-  </div>
-</div>
-
-<div id="mirrorCoinOverlay" class="overlay-backdrop hidden">
-  <div class="modal-card mirror-coin-card" id="mirrorCoinCard">
-    <h2>Sorteo de apertura</h2>
-    <div class="mirror-coin-scene">
-      <div class="mirror-coin" id="mirrorCoin">1</div>
-    </div>
-    <p id="mirrorCoinText" aria-live="polite">Sorteando quién abre…</p>
-    <div class="modal-actions">
-      <button class="kbtn yellow big block" id="mirrorCoinBtn" disabled>Empezar</button>
     </div>
   </div>
 </div>
@@ -363,8 +349,14 @@
     </div>
     <label class="settings-check"><input type="checkbox" class="kcheck" id="vibrateToggle"><span>Vibración</span></label>
     <label class="settings-check"><input type="checkbox" class="kcheck" id="showMovesToggle"><span>Mostrar movimientos posibles</span></label>
+    <label class="settings-check"><input type="checkbox" class="kcheck" id="distHelpToggle"><span>Ayuda de distancia (pasos que le faltan a cada uno)</span></label>
+    <label class="settings-check"><input type="checkbox" class="kcheck" id="lotteryToggle"><span>Sortear quién empieza</span></label>
+    <label class="settings-check"><input type="checkbox" class="kcheck" id="pieToggle"><span>Regla del pastel (partidas de 2: el segundo puede cambiar de lado)</span></label>
     <label class="settings-check"><input type="checkbox" class="kcheck" id="glassToggle"><span>Efecto vidrio en Trofeos</span></label>
     <p class="field-hint" id="glassHint" style="margin-top:-6px; margin-bottom:16px;">Se ve lindo, pero puede ir a saltos en celulares de gama baja.</p>
+    <label class="settings-check"><input type="checkbox" class="kcheck" id="explainToggle"><span>La IA explica sus jugadas (Fácil y Normal, primeras partidas)</span></label>
+    <label class="settings-check"><input type="checkbox" class="kcheck" id="adaptiveToggle"><span>Dificultad adaptativa</span></label>
+    <p class="field-hint" id="adaptiveHint" style="margin-top:-6px; margin-bottom:16px;"></p>
     <div class="settings-row">
       <span>Recordatorio diario</span>
       <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
@@ -400,6 +392,8 @@
       <div class="tutorial-step"><span class="emoji">🚶</span><p><strong>Mover:</strong> con el modo "Mover" activo, tocá una de las casillas resaltadas para desplazar tu ficha ahí.</p></div>
       <div class="tutorial-step"><span class="emoji">🧱</span><p><strong>Pared:</strong> activá "Colocar pared", arrastrá el dedo sobre el tablero para elegir dónde ubicarla y soltá para confirmar. Ninguna pared puede dejar a un jugador sin camino posible al centro.</p></div>
       <div class="tutorial-step"><span class="emoji">🔁</span><p><strong>Turnos:</strong> cada jugador tiene una cantidad limitada de paredes. Cuando se acaban, solo se puede mover.</p></div>
+      <div class="tutorial-step"><span class="emoji">🏁</span><p><strong>Clásico oficial:</strong> en ese modo la meta es el borde opuesto del tablero (la franja de tu color), no el centro.</p></div>
+      <div class="tutorial-step"><span class="emoji">💡</span><p><strong>Ayudas:</strong> en Ajustes podés activar la ayuda de distancia (los pasos que le faltan a cada uno). El botón Pista resalta la mejor jugada y cuesta monedas.</p></div>
       <div class="tutorial-step"><span class="emoji">🪙</span><p><strong>Monedas:</strong> ganale a la IA o resolvé el desafío diario para juntar monedas, y usalas en la tienda para conseguir emotes y globos.</p></div>
     </div>
     <p style="text-align:center; font-size:0.82rem; color:var(--ink-soft);">Podés volver a ver esta ayuda desde "Más opciones".</p>
@@ -452,6 +446,7 @@
     </div>
     <p class="swatch-label" style="text-align:left; margin-top:6px;">Tus emotes en partida · tocá un espacio y después un emote tuyo</p>
     <div class="shop-slots" id="shopSlots"></div>
+    <div class="shop-extras" id="shopExtras"></div>
     <div class="shop-tabs" id="shopTabs"></div>
     <div class="shop-grid" id="shopGrid"></div>
     <div class="shop-detail" id="shopDetail"></div>
@@ -465,8 +460,19 @@
   <div class="modal-card" id="dailyCard">
     <h2>Desafío diario</h2>
     <div class="daily-status" id="dailyStatusBody"></div>
+    <div class="daily-cal" id="dailyCal">
+      <div class="cal-head">
+        <button type="button" class="cal-nav" id="dailyCalPrev" aria-label="Mes anterior">‹</button>
+        <strong id="dailyCalTitle"></strong>
+        <button type="button" class="cal-nav" id="dailyCalNext" aria-label="Mes siguiente">›</button>
+      </div>
+      <div class="cal-dow" aria-hidden="true"><span>L</span><span>M</span><span>M</span><span>J</span><span>V</span><span>S</span><span>D</span></div>
+      <div class="cal-grid" id="dailyCalGrid"></div>
+      <p class="cal-legend" id="dailyCalLegend"></p>
+    </div>
     <div class="modal-actions">
       <button class="kbtn yellow block" id="playDailyBtn">Jugar</button>
+      <button class="kbtn green block hidden" id="shareDailyOverlayBtn">Compartir resultado</button>
       <button class="kbtn grey block" id="closeDailyBtn">Cerrar</button>
     </div>
   </div>
